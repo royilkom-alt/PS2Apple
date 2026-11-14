@@ -7,7 +7,7 @@ PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on
 
 <div align="center">
 
-### ❤️ Made by iSolution
+### Made with ❤️ by iSolution
 
 **Created by iSolution.**  
 Subscribe for updates, new releases, and gameplay demos!
