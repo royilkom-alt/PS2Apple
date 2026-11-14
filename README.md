@@ -2,22 +2,8 @@
 
 PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on macOS or Windows and build an IPA from its code.
 
-
 ---
 
-<div align="center">
-
-### Made with ❤️ by iSolution
-
-**Created by iSolution.**  
-Subscribe for updates, new releases, and gameplay demos!
-
-[![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@iSolutional)
-[![Discord](https://img.shields.io/badge/Discord-Join_Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e58k5bkja3)
-
-⭐ **Star this project on GitHub to support future development!**
-
-</div>
 
 ## Download and build
 
@@ -47,6 +33,20 @@ Subscribe for updates, new releases, and gameplay demos!
     />
   </a>
 
+
+</div>
+
+<div align="center">
+
+### Made with ❤️ by iSolution
+
+**Created by iSolution.**  
+Subscribe for updates, new releases, and gameplay demos!
+
+[![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/@iSolutional)
+[![Discord](https://img.shields.io/badge/Discord-Join_Community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/e58k5bkja3)
+
+⭐ **Star this project on GitHub to support future development!**
 
 </div>
 
