@@ -1,0 +1,194 @@
+diff --git a/port/tools/build_host64.py b/port/tools/build_host64.py
+--- a/port/tools/build_host64.py
++++ b/port/tools/build_host64.py
+@@ -115,8 +115,14 @@
+ def host_units(t):
+     if t.windows:
+         return list(HOST_UNITS)
+-    platform_units = ANDROID_UNITS if t.android else ['port/ios/main.m', 'port/ios/launcher.m'] if t.ios else []
+-    return [POSIX_UNITS.get(u, u) for u in HOST_UNITS if u not in WINDOWS_ONLY] + platform_units
++    units = [POSIX_UNITS.get(u, u) for u in HOST_UNITS if u not in WINDOWS_ONLY]
++    if t.ios:
++        units.remove('port/host/touch_host.c')
++        units += ['port/ios/main.m', 'port/ios/launcher.m', 'port/ios/touch_bridge.c',
++                  'port/ios/shared/PS2Touch.m']
++    if t.android:
++        units += ANDROID_UNITS
++    return units
+ 
+ 
+ def glue(t):
+diff --git a/port/gs/present.c b/port/gs/present.c
+--- a/port/gs/present.c
++++ b/port/gs/present.c
+@@ -11,6 +11,9 @@
+    the CAMetalLayer of an SDL Metal view. On a phone the surface is dropped while the app is in
+    the background and made again when it comes back (app_background_wait, finding 091). */
+ #include <SDL3/SDL.h>
++#if defined(DHD_IOS)
++#include "../ios/shared/PS2AppleUI.h"
++#endif
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -280,6 +283,9 @@
+     hle_log("gs: window shown%s\n", minimised ? " minimised (a minimised start)" : "");
+     if (minimised) show_minimised();
+     else { SDL_ShowWindow(sdl_window); SDL_RaiseWindow(sdl_window); }
++#if defined(DHD_IOS)
++    if (!PS2AttachControls(sdl_window)) hle_log("touch: SDL did not provide a UIKit window\n");
++#endif
+ }
+ 
+ /* The native handle, waited for up to tries x 10 ms (a phone makes its surface a little after the
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+--- a/port/ios/launcher.m
++++ b/port/ios/launcher.m
+@@ -4,6 +4,7 @@
+ #include <SDL3/SDL.h>
+ #include <stdio.h>
+ #include "launcher.h"
++#import "shared/PS2AppleUI.h"
+ #include "../render/include/dhd_settings.h"
+ 
+ __attribute__((used)) const char ps2apple_downhill_frontend[] = "PS2AppleDownhillUI-v1";
+@@ -11,6 +12,12 @@
+ const char *host_disc_check(const char *path);
+ static SDL_JoystickID chosen_gamepad;
+ static bool gamepads_started;
++static NSString *const TouchSettingsKey = @"PS2AppleDownhillTouch-v1";
++
++static BOOL DHDTouchLayoutKey(NSString *key)
++{
++    return [key hasPrefix:@"touch_layout."] || [key isEqualToString:@"touch_analog_size"];
++}
+ 
+ SDL_JoystickID dhd_ios_selected_gamepad(void) { return chosen_gamepad; }
+ 
+@@ -87,6 +94,12 @@
+     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+     self.view.backgroundColor = DHDColor(0x111214, 1);
+     self.values = [NSMutableDictionary dictionary];
++    NSDictionary *layout = [NSUserDefaults.standardUserDefaults dictionaryForKey:TouchSettingsKey];
++    for (NSString *key in layout)
++        if (DHDTouchLayoutKey(key) && [layout[key] isKindOfClass:NSString.class]) self.values[key] = layout[key];
++    NSDictionary *touchDefaults = @{@"touch_enabled":@"1", @"touch_size":@"auto", @"touch_opacity":@"60",
++        @"touch_stick":@"floating", @"touch_analog_size":@"large", @"touch_with_pad":@"hide"};
++    for (NSString *key in touchDefaults) [self value:key fallback:touchDefaults[key]];
+     self.pads = @[];
+     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+     UIView *catalog = [[UIView alloc] init];
+@@ -387,12 +400,19 @@
+         [self toggle:@"Particle effects" key:@"particles" fallback:@"1"];
+     } else if (sender.selectedSegmentIndex == 1) {
+         [self toggle:@"Virtual controller" key:@"touch_enabled" fallback:@"1"];
++        UIButton *edit = [UIButton buttonWithType:UIButtonTypeSystem];
++        [edit setTitle:@"Edit Layout" forState:UIControlStateNormal];
++        [edit.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
++        [edit addTarget:self action:@selector(editTouchLayout) forControlEvents:UIControlEventTouchUpInside];
++        [self row:@"Touch positions" control:edit];
+         [self choice:@"Button size" key:@"touch_size" values:@[@"auto", @"70", @"85", @"100", @"105"]
+               labels:@[@"Auto", @"70%", @"85%", @"100%", @"105%"] fallback:@"auto"];
+         [self choice:@"Button opacity" key:@"touch_opacity" values:@[@"25", @"40", @"60", @"80", @"100"]
+               labels:@[@"25%", @"40%", @"60%", @"80%", @"100%"] fallback:@"60"];
+         [self choice:@"Analog stick" key:@"touch_stick" values:@[@"floating", @"fixed"]
+               labels:@[@"Floating", @"Fixed"] fallback:@"floating"];
++        [self choice:@"Analog size" key:@"touch_analog_size" values:@[@"standard", @"large", @"extra_large"]
++              labels:@[@"Standard", @"Large", @"Extra large"] fallback:@"large"];
+         [self choice:@"Touch with gamepad" key:@"touch_with_pad" values:@[@"hide", @"show"]
+               labels:@[@"Auto-hide buttons", @"Keep buttons visible"] fallback:@"hide"];
+         UIButton *gamepad = [UIButton buttonWithType:UIButtonTypeSystem];
+@@ -491,6 +511,11 @@
+     self.discStatus.textColor = DHDColor(problem ? 0xD7AE76 : 0x8BD9CE, 1);
+ }
+ 
++- (void)editTouchLayout
++{
++    [self presentViewController:PS2TouchLayoutEditor(self.values) animated:YES completion:nil];
++}
++
+ - (void)play
+ {
+     const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
+@@ -514,15 +539,26 @@
+     }
+     self.values[@"fps"] = [self value:@"fps" fallback:@"60"];
+     self.values[@"iso"] = self.disc;
+-    self.values[@"touch_preset"] = @"classic";
++    NSMutableDictionary *layout = [NSMutableDictionary dictionary];
+     for (NSString *key in self.values) {
++        if (DHDTouchLayoutKey(key)) {
++            layout[key] = self.values[key];
++            continue;
++        }
+         if (!dhd_settings_save(self.settingsPath.fileSystemRepresentation, key.UTF8String, self.values[key].UTF8String)) {
+             [self alert:@"Settings could not be saved" message:@"Check available storage, then tap Play again."];
+             return;
+         }
+     }
++    [NSUserDefaults.standardUserDefaults setObject:layout forKey:TouchSettingsKey];
++    BOOL touchEnabled = DHDEnabled(self.values[@"touch_enabled"]);
++    NSMutableDictionary *touchOptions = [self.values mutableCopy];
++    touchOptions[@"touch_enabled"] = touchEnabled ? @"1" : @"0";
++    touchOptions[@"perf_counter"] = @"0";  /* Downhill draws its own FPS counter. */
++    PS2ConfigureControls(touchOptions);
+     setenv("DHD_FPS", self.values[@"fps"].UTF8String, 1);
+-    setenv("DHD_TOUCH_ENABLED", DHDEnabled(self.values[@"touch_enabled"]) ? "1" : "0", 1);
++    setenv("DHD_TOUCH_ENABLED", touchEnabled ? "1" : "0", 1);
++    if (touchEnabled) setenv("DHD_TOUCH", "ios", 1);
+     [self.controllerTimer invalidate];
+     self.wantsPlay = YES;
+ }
+diff --git a/port/ios/touch_bridge.c b/port/ios/touch_bridge.c
+new file mode 100644
+--- /dev/null
++++ b/port/ios/touch_bridge.c
+@@ -0,0 +1,48 @@
++/* Map the shared UIKit overlay to Downhill's native player-one pad. GPL-3.0-or-later. */
++#include "launcher.h"
++#include "shared/PS2AppleUI.h"
++#include "../hle/hle.h"
++#include "../host/host_api.h"
++
++/* The game supplies a zero-initialized field. UIKit provides the pad separately. */
++void host_service_touch_field(uint32_t address) { (void)address; }
++
++int touch_host_event(const SDL_Event *event) { (void)event; return 0; }
++
++void touch_host_tick(void)
++{
++    SDL_JoystickID selected = dhd_ios_selected_gamepad();
++    PS2SetGamepadConnected(selected ? SDL_IsGamepad(selected) : SDL_HasGamepad());
++}
++
++static uint8_t axis_byte(float value)
++{
++    return (uint8_t)((value + 1.0f) * 127.5f + 0.5f);
++}
++
++void touch_host_merge(HostPad *out)
++{
++    PS2TouchPad touch = PS2ReadTouchPad();
++    if (!touch.enabled) return;
++    static const uint16_t pressure_order[12] = {
++        PAD_RIGHT, PAD_LEFT, PAD_UP, PAD_DOWN, PAD_TRIANGLE, PAD_CIRCLE,
++        PAD_CROSS, PAD_SQUARE, PAD_L1, PAD_R1, PAD_L2, PAD_R2
++    };
++    out->buttons |= touch.buttons;
++    for (int i = 0; i < 12; ++i)
++        if (touch.buttons & pressure_order[i]) out->pressure[i] = 255;
++    if (touch.active[0]) {
++        out->left_x = axis_byte(touch.x[0]);
++        out->left_y = axis_byte(touch.y[0]);
++    }
++    if (touch.active[1]) {
++        out->right_x = axis_byte(touch.x[1]);
++        out->right_y = axis_byte(touch.y[1]);
++    }
++}
++
++int touch_host_overlay(float *items, int max, float *width, float *height)
++{
++    (void)items; (void)max; (void)width; (void)height;
++    return 0;  /* UIKit is the only iOS controller overlay. */
++}

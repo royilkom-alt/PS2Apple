@@ -1,0 +1,1182 @@
+diff --git a/port/hle/pc_settings.c b/port/hle/pc_settings.c
+index 058e9ff..0651772 100644
+--- a/port/hle/pc_settings.c
++++ b/port/hle/pc_settings.c
+@@ -410,7 +410,8 @@ static void page_build(MenuPage *p)
+     const char *list = host_getenv("DHD_PC_SETTINGS_ROWS");
+     controls_row = tabs[tab] == TAB_CONTROLS && (!list || listed(list, "DHD_KEYBOARD")) ? menu_page_row(p, "Controls", 1) : -1;
+     const char *touch = host_getenv("DHD_TOUCH");
+-    touch_row = tabs[tab] == TAB_CONTROLS && touch && *touch ? menu_page_row(p, "Touch Controls", 1) : -1;
++    /* The iOS launcher owns the settings for its standard pad. */
++    touch_row = tabs[tab] == TAB_CONTROLS && touch && *touch && strcmp(touch, "ios") ? menu_page_row(p, "Touch Controls", 1) : -1;
+ }
+ 
+ static void page_update(MenuPage *p, int cursor)  /* the hint for the row (the legend stays) */
+diff --git a/port/hle/test_touch.c b/port/hle/test_touch.c
+index 68703da..8d74376 100644
+--- a/port/hle/test_touch.c
++++ b/port/hle/test_touch.c
+@@ -1095,6 +1095,121 @@ static void test_layout_text(void)
+                   fabsf(back.edit[p][c].size - s.edit[p][c].size) < 0.01f);
+ }
+ 
++/* The iOS pad is usable before the race HUD, including the game's title, menus and pause
++   screen. These checks read its actual shapes and PS2 pad output, not just its enable flag. */
++static void test_full_pad(void)
++{
++    const int rates[] = {30, 60, 120};
++    const int controls[] = {TC_CROSS, TC_TRIANGLE, TC_CSQUARE, TC_CCIRCLE, TC_PAUSE, TC_CAMERA, TC_L3, TC_R3};
++    const uint16_t bits[] = {PAD_CROSS, PAD_TRIANGLE, PAD_SQUARE, PAD_CIRCLE, PAD_START, PAD_SELECT, PAD_L3, PAD_R3};
++    TouchShape shapes[TOUCH_SHAPES];
++    for (int hud = 0; hud < 2; hud++)
++        for (unsigned rate = 0; rate < sizeof rates / sizeof *rates; rate++) {
++            start(TOUCH_CLASSIC, TOUCH_ATTACK_FLICK);
++            TouchSettings s = *touch_settings(t);
++            s.full_pad = 1;
++            s.stick_fixed = 1;
++            touch_configure(t, &s, NULL);
++            game.race_hud = hud;
++            game.clock_moving = hud;   /* a stopped race clock must not block menu presses */
++            game.fps = rates[rate];
++            fields(30);
++            CHECK(touch_visible(t) && touch_owns_touches(t));
++            int count = touch_shapes(t, shapes, TOUCH_SHAPES);
++            int symbols[TS_STRIPES + 1] = {0};
++            for (int i = 0; i < count; i++) symbols[shapes[i].kind]++;
++            CHECK(symbols[TS_CROSS] == 1 && symbols[TS_CIRCLE] == 1);
++            CHECK(symbols[TS_TRIANGLE] == 1 && symbols[TS_SQUARE] == 1);
++            CHECK(symbols[TS_CHEVRON] == 2 && symbols[TS_DISC] >= 8);
++            CHECK(touch_hud_mode(t) == 0 && !touch_freeze(t));
++            for (unsigned i = 0; i < sizeof controls / sizeof *controls; i++) {
++                float x, y;
++                at(controls[i], &x, &y);
++                touch_down(t, 100+i, x, y, now);
++                field();
++                CHECK(buttons() == bits[i]);
++                touch_up(t, 100+i, x, y, now);
++                fields(8);
++                CHECK(buttons() == 0);
++            }
++            /* D-pad diagonals and sliding to the opposite direction. */
++            float x, y, r;
++            CHECK(touch_control(t, TC_DPAD, &x, &y, &r));
++            touch_down(t, 20, x-r*0.65f, y-r*0.65f, now);
++            field();
++            CHECK(buttons() == (PAD_UP | PAD_LEFT));
++            touch_move(t, 20, x+r*0.65f, y+r*0.65f, now);
++            field();
++            CHECK(buttons() == (PAD_DOWN | PAD_RIGHT));
++            touch_up(t, 20, x, y, now);
++            fields(8);
++            /* Both sticks plus pedal at once: movement is independent of face buttons. */
++            at(TC_STICK, &x, &y);
++            touch_down(t, 21, x, y, now);
++            touch_move(t, 21, x+8, y-4, now);
++            at(TC_RSTICK, &x, &y);
++            touch_down(t, 22, x, y, now);
++            touch_move(t, 22, x-8, y+4, now);
++            at(TC_CROSS, &x, &y);
++            touch_down(t, 23, x, y, now);
++            field();
++            uint16_t b = 0;
++            uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
++            touch_pad(t, &b, &lx, &ly, &rx, &ry);
++            CHECK((b & PAD_CROSS) && lx > 210 && ly < 90 && rx < 45 && ry > 165);
++            touch_cancel_all(t, now);
++            field();
++            CHECK(buttons() == 0 && stick_x() == 128);
++            /* Each shoulder half maps to one PS2 button; centre holds both. */
++            for (int side = 0; side < 2; side++) {
++                at(side ? TC_RBAR : TC_LBAR, &x, &y);
++                touch_down(t, 24, x-10, y, now);
++                field();
++                CHECK(buttons() == (side ? PAD_R1 : PAD_L2));
++                touch_cancel_all(t, now);
++                touch_down(t, 25, x+10, y, now);
++                field();
++                CHECK(buttons() == (side ? PAD_R2 : PAD_L1));
++                touch_cancel_all(t, now);
++            }
++            /* No invisible pad after a gamepad disconnect, even in menus. */
++            touch_pad_used(t, now);
++            CHECK(!touch_visible(t));
++            touch_pad_lost(t, now);
++            CHECK(touch_visible(t) && touch_shapes(t, shapes, TOUCH_SHAPES) == count);
++            CHECK(!(buttons() & PAD_START));
++            /* A quick tap between reads must reach the game once, then release. */
++            at(TC_CAMERA, &x, &y);
++            touch_down(t, 26, x, y, now);
++            touch_up(t, 26, x, y, now);
++            field();
++            CHECK(buttons() == PAD_SELECT);
++            fields(8);
++            CHECK(buttons() == 0);
++            /* The controls stay on screen as the game switches between menus and race. */
++            game.race_hud = !hud;
++            fields(30);
++            CHECK(touch_visible(t) && touch_shapes(t, shapes, TOUCH_SHAPES) == count);
++        }
++    /* Insets and small screens: each control's centre remains inside the usable area. */
++    const TouchScreen screens[] = {
++        {104, 58, 0, 0, 0, 0, 0, 0, 0, 0},
++        {145, 65, 9, 9, 0, 3, 0, 0, 0, 0},
++        {204, 150, 0, 0, 4, 4, 0, 0, 0, 0},
++    };
++    for (unsigned i = 0; i < sizeof screens / sizeof *screens; i++) {
++        TouchSettings s = *touch_settings(t);
++        s.size = 105;
++        touch_configure(t, &s, &screens[i]);
++        for (int c = 0; c < TC_COUNT; c++) {
++            float x, y, r;
++            if (!touch_control(t, c, &x, &y, &r)) continue;
++            CHECK(x >= screens[i].strip_left && x <= screens[i].width-screens[i].strip_right);
++            CHECK(y >= screens[i].strip_top && y <= screens[i].height-screens[i].strip_bottom);
++        }
++    }
++}
++
+ int main(void)
+ {
+     test_scaling();
+@@ -1116,6 +1231,7 @@ int main(void)
+     test_fixed_stick();
+     test_queue();
+     test_tilt();
++    test_full_pad();
+     touch_free(t);
+     if (failures) { fprintf(stderr, "test_touch: %d failed\n", failures); return 1; }
+     printf("test_touch: all passed\n");
+diff --git a/port/hle/touch.c b/port/hle/touch.c
+index 8442fdf..8e62e47 100644
+--- a/port/hle/touch.c
++++ b/port/hle/touch.c
+@@ -54,10 +54,10 @@ typedef struct { int anchor, shape; float px, py, w, h; } Place;  /* % of the re
+ 
+ static const char *const control_names[TC_COUNT] = {
+     "pedal", "hop", "brake", "slide", "square", "circle", "camera", "pause",
+-    "cross", "triangle", "csquare", "ccircle", "plusleft", "plusright", "lbar", "rbar", "l3", "r3", "stick", "trick"
++    "cross", "triangle", "csquare", "ccircle", "plusleft", "plusright", "lbar", "rbar", "l3", "r3", "stick", "trick", "dpad", "rstick"
+ };
+ static const char *const control_labels[TC_COUNT] = {
+-    "PEDAL", "HOP", "BRAKE", "SLIDE", "", "", "", "", "", "", "", "", "", "", "", "", "L3", "R3", "STICK", "TRICK"
++    "PEDAL", "HOP", "BRAKE", "SLIDE", "", "", "", "", "", "", "", "", "", "", "", "", "L3", "R3", "STICK", "TRICK", "D-PAD", "R STICK"
+ };
+ 
+ typedef struct { int on; float x, y, r, hw, hh; int box; } Ctl;  /* r: round; hw, hh: box half sizes */
+@@ -137,7 +137,7 @@ float touch_button_scale(float s) { return 1.2f * s - 0.2f; }
+ 
+ /* ---------------------------------------------------------------- the state */
+ 
+-enum { JOB_NONE, JOB_STICK, JOB_BUTTON, JOB_PEDAL, JOB_TRICK, JOB_AIR_WAIT, JOB_PANEL, JOB_EDIT, JOB_IGNORED };
++enum { JOB_NONE, JOB_STICK, JOB_BUTTON, JOB_PEDAL, JOB_TRICK, JOB_AIR_WAIT, JOB_PANEL, JOB_EDIT, JOB_IGNORED, JOB_RSTICK };
+ /* PAUSE_PAD: a controller took over the game's pause menu (or its question) from the rows: the
+    overlay no longer knows where the game's menu is, so it hides and leaves the menu to the
+    controller until the race goes on. */
+@@ -340,6 +340,44 @@ static int right_handed(const Touch *t) { return !t->set.left_handed; }
+ /* x as the right-handed layout has it (the left hand mirrors). */
+ static float mirror_x(const Touch *t, float x) { return right_handed(t) ? x : t->screen.width - x; }
+ 
++/* Standard mobile pad, anchored inside the real safe area. The same controls work before
++   the first race HUD, in the game's menus, while paused, and in a race. */
++static void full_pad_layout(Touch *t)
++{
++    const TouchScreen *sc = &t->screen;
++    float left = sc->strip_left, right = sc->width - sc->strip_right;
++    float top = sc->strip_top, bottom = sc->height - sc->strip_bottom;
++    float s = t->set.size > 0 ? t->set.size / 100.0f : 1.0f;
++    s = fminf(s, fminf((right - left) / 130.0f, (bottom - top) / 55.0f));
++    s = fmaxf(s, 0.35f);
++    t->s = t->bs = s;
++    memset(t->ctl, 0, sizeof t->ctl);
++    struct { int control; float x, y, radius, hw, hh; } places[] = {
++        {TC_DPAD, left + 18*s, bottom - 19*s, 13*s, 0, 0},
++        {TC_STICK, left + 46*s, bottom - 15*s, 11*s, 0, 0},
++        {TC_RSTICK, right - 47*s, bottom - 15*s, 11*s, 0, 0},
++        {TC_L3, left + 46*s, bottom - 33*s, 4*s, 0, 0},
++        {TC_R3, right - 47*s, bottom - 33*s, 4*s, 0, 0},
++        {TC_TRIANGLE, right - 20*s, bottom - 32*s, 4.8f*s, 0, 0},
++        {TC_CSQUARE, right - 30*s, bottom - 22*s, 4.8f*s, 0, 0},
++        {TC_CCIRCLE, right - 10*s, bottom - 22*s, 4.8f*s, 0, 0},
++        {TC_CROSS, right - 20*s, bottom - 12*s, 4.8f*s, 0, 0},
++        {TC_LBAR, left + 21*s, bottom - 48*s, 0, 16*s, 4*s},
++        {TC_RBAR, right - 21*s, bottom - 48*s, 0, 16*s, 4*s},
++        {TC_CAMERA, (left + right)/2 - 10*s, top + 7*s, 0, 8*s, 3.5f*s},
++        {TC_PAUSE, (left + right)/2 + 10*s, top + 7*s, 0, 8*s, 3.5f*s},
++    };
++    for (unsigned i = 0; i < sizeof places / sizeof *places; i++) {
++        Ctl *k = &t->ctl[places[i].control];
++        k->on = 1;
++        k->x = right_handed(t) ? places[i].x : left + right - places[i].x;
++        k->y = places[i].y;
++        k->r = places[i].radius;
++        k->hw = places[i].hw, k->hh = places[i].hh;
++        k->box = k->hw > 0;
++    }
++}
++
+ /* The layout for the settings and the screen. */
+ static void lay_out(Touch *t, int hud_moved)
+ {
+@@ -375,6 +413,7 @@ static void lay_out(Touch *t, int hud_moved)
+         k->hw = w / 2 * scale, k->hh = h / 2 * scale;
+         if (c == TC_TRICK) k->r = st->trick_size / 2.0f * e->size;
+     }
++    if (st->full_pad) full_pad_layout(t);
+     /* the camera cutout (read at run time) is kept clear: a control over it moves inward */
+     const TouchScreen *sc = &t->screen;
+     if (sc->cut_x1 > sc->cut_x0 && sc->cut_y1 > sc->cut_y0)
+@@ -595,7 +634,8 @@ static void select_press_begins(Touch *t, Finger *f)
+    rest at once. */
+ static void press_rule(Touch *t, Finger *f)
+ {
+-    if (f->buttons & PAD_CROSS) cross_press_begins(t, f, f->job != JOB_PEDAL);
++    if (t->set.full_pad) f->sent = 1, f->due_now = 0, f->due_race = 0;
++    else if (f->buttons & PAD_CROSS) cross_press_begins(t, f, f->job != JOB_PEDAL);
+     else if (f->buttons & PAD_SELECT) select_press_begins(t, f);
+     else f->sent = 1, f->due_now = 0, f->due_race = 0;
+ }
+@@ -823,6 +863,7 @@ static int race_on_screen(const Touch *t) { return t->hud_seen > 0 && t->now - t
+ 
+ int touch_visible(const Touch *t)
+ {
++    if (t->set.full_pad) return !t->hidden_by_pad;
+     if (t->editor) return 1;
+     if (t->pause == PAUSE_PAD) return 0;   /* the controller has the game's menu */
+     if (t->pause != PAUSE_NONE) return 1;
+@@ -831,10 +872,11 @@ int touch_visible(const Touch *t)
+ 
+ /* The overlay's touches: while it shows, and in a race it hid for a controller (the touch that
+    brings it back); in the menus a touch is the menus' (their mouse). */
+-int touch_owns_touches(const Touch *t) { return touch_visible(t) || (t->hidden_by_pad && race_on_screen(t)); }
++int touch_owns_touches(const Touch *t) { return t->set.full_pad || touch_visible(t) || (t->hidden_by_pad && race_on_screen(t)); }
+ 
+ int touch_hud_mode(const Touch *t)
+ {
++    if (t->set.full_pad) return 0;
+     if (!t->set.hud_moved || t->editor || !race_on_screen(t) || t->hidden_by_pad) return 0;
+     return right_handed(t) ? 1 : 2;
+ }
+@@ -1108,6 +1150,7 @@ static int layout_valid(const Touch *t)
+ 
+ void touch_open_editor(Touch *t)
+ {
++    if (t->set.full_pad) return;
+     t->editor = 1;
+     t->editor_tab = EDIT_GROUND;
+     t->edit_selected = t->set.preset == TOUCH_CLASSIC ? TC_CROSS : TC_PEDAL;
+@@ -1347,6 +1390,53 @@ static void route_classic(Touch *t, Finger *f)
+     f->job = JOB_IGNORED;
+ }
+ 
++static uint16_t dpad_buttons(const Touch *t, float x, float y)
++{
++    const Ctl *k = &t->ctl[TC_DPAD];
++    float dx = (x - k->x) / k->r, dy = (y - k->y) / k->r;
++    uint16_t b = 0;
++    if (dx > 0.28f) b |= PAD_RIGHT;
++    if (dx < -0.28f) b |= PAD_LEFT;
++    if (dy > 0.28f) b |= PAD_DOWN;
++    if (dy < -0.28f) b |= PAD_UP;
++    return b;
++}
++
++static void route_full_pad(Touch *t, Finger *f)
++{
++    static const int controls[] = {TC_DPAD, TC_STICK, TC_RSTICK, TC_CAMERA, TC_PAUSE,
++        TC_LBAR, TC_RBAR, TC_L3, TC_R3, TC_CROSS, TC_TRIANGLE, TC_CSQUARE, TC_CCIRCLE};
++    int c = control_at(t, f->x, f->y, controls, sizeof controls / sizeof *controls);
++    f->control = c;
++    if (c < 0 || in_strip(t, f->x, f->y)) { f->job = JOB_IGNORED; return; }
++    if (c == TC_STICK) {
++        if (t->stick_finger < 0) stick_begins(t, f);
++        else f->job = JOB_IGNORED;
++        return;
++    }
++    if (c == TC_RSTICK) {
++        for (int i = 0; i < TOUCH_FINGERS; i++)
++            if (&t->f[i] != f && t->f[i].used && t->f[i].job == JOB_RSTICK) { f->job = JOB_IGNORED; return; }
++        f->job = JOB_RSTICK;
++        return;
++    }
++    f->job = JOB_BUTTON;
++    switch (c) {
++    case TC_DPAD: f->buttons = dpad_buttons(t, f->x, f->y); break;
++    case TC_CAMERA: f->buttons = PAD_SELECT; break;
++    case TC_PAUSE: f->buttons = PAD_START; break;
++    case TC_L3: f->buttons = PAD_L3; break;
++    case TC_R3: f->buttons = PAD_R3; break;
++    case TC_LBAR: case TC_RBAR: f->buttons = bar_buttons(t, c, f->x); break;
++    case TC_CROSS: f->buttons = PAD_CROSS; break;
++    case TC_TRIANGLE: f->buttons = PAD_TRIANGLE; break;
++    case TC_CSQUARE: f->buttons = PAD_SQUARE; break;
++    case TC_CCIRCLE: f->buttons = PAD_CIRCLE; break;
++    }
++    press_begins(t, f);
++    buzz(t, TOUCH_BUZZ_TICK);
++}
++
+ /* Hints that end on a touch. */
+ static void hint_touch(Touch *t, Finger *f)
+ {
+@@ -1373,10 +1463,11 @@ void touch_down(Touch *t, long long id, float x, float y, double now)
+     if (t->hidden_by_pad) {   /* the touch that brings the overlay back is never sent */
+         t->hidden_by_pad = 0;
+         f->job = JOB_IGNORED;
+-        if (race_on_screen(t)) return;
++        if (race_on_screen(t) || t->set.full_pad) return;
+     }
+     if (t->editor) { editor_down(t, f); return; }
+     if (!touch_visible(t)) { f->job = JOB_IGNORED; return; }
++    if (t->set.full_pad) { route_full_pad(t, f); return; }
+     if (t->pause != PAUSE_NONE) {   /* only the rows (and Pause, Back) send input */
+         static const int pause_button[] = {TC_PAUSE};
+         f->job = JOB_PANEL;
+@@ -1397,6 +1488,7 @@ void touch_down(Touch *t, long long id, float x, float y, double now)
+ static void stick_follow(Touch *t, Finger *f)
+ {
+     float range = (float)(t->set.stick_range > 0 ? t->set.stick_range : 12);
++    if (t->set.full_pad) range = t->ctl[TC_STICK].r * 0.8f;
+     float dx = f->x - t->stick_cx, dy = f->y - t->stick_cy, d = hypotf(dx, dy);
+     if (d > range && !t->set.stick_fixed) {   /* past its range the centre follows */
+         t->stick_cx = f->x - dx / d * range;
+@@ -1435,6 +1527,10 @@ void touch_move(Touch *t, long long id, float x, float y, double now)
+     case JOB_TRICK: if (t->trick.on && t->trick.finger == (int)(f - t->f)) trick_step(t, f); break;
+     case JOB_EDIT: editor_move(t, f); break;
+     case JOB_BUTTON:
++        if (t->set.full_pad) {
++            if (f->control == TC_DPAD) f->buttons = dpad_buttons(t, x, y);
++            break;
++        }
+         if (t->set.preset == TOUCH_CLASSIC && (f->buttons & PAD_CROSS) && !paused(t)) {
+             /* Classic's ✕ may roll onto a + spot or ◻ / ○: that press is added, ✕ stays */
+             int c;
+@@ -1492,6 +1588,7 @@ void touch_cancel_all(Touch *t, double now)
+ void touch_back(Touch *t, double now)
+ {
+     t->now = now;
++    if (t->set.full_pad) { pulse(t, PAD_TRIANGLE, PRESS_FIELDS); return; }
+     if (t->freeze) { t->freeze = 0; return; }
+     if (t->editor) { t->editor = 0; t->saved = 1; return; }
+     if (t->pause == PAUSE_CONTROLS) { t->pause = PAUSE_OPEN; return; }   /* the overlay's own page */
+@@ -1523,6 +1620,7 @@ void touch_pad_used(Touch *t, double now)
+ void touch_pad_lost(Touch *t, double now)
+ {
+     t->now = now;
++    if (t->set.full_pad) { t->hidden_by_pad = 0; return; }
+     if (!race_on_screen(t)) return;
+     t->hidden_by_pad = 0;
+     if (!t->game.online && t->pause == PAUSE_NONE) pause_open(t);   /* the menu-open chain starts with its own START */
+@@ -1847,7 +1945,7 @@ void touch_update(Touch *t, const TouchGame *game, double now)
+     }
+     t->race_was_on = race_on_screen(t);
+     lifted_presses_step(t);
+-    if (was_on && !t->race_was_on && t->pause == PAUSE_NONE) {   /* the race is gone */
++    if (was_on && !t->race_was_on && t->pause == PAUSE_NONE && !t->set.full_pad) {   /* the race is gone */
+         drop_race_touches(t);
+         t->panel_open = 0;
+         t->hold_cross_until = 0;
+@@ -1872,17 +1970,21 @@ void touch_update(Touch *t, const TouchGame *game, double now)
+         if (pushed || now - t->freeze_since > 5000 || !game->air || !race_on_screen(t)) t->freeze = 0;
+         if (pushed) t->hint = 0;
+     }
+-    pause_step(t);
+-    air_layout_step(t);
+-    if (t->trick.on) {
+-        Finger *f = &t->f[t->trick.finger];
+-        trick_step(t, f);
+-        trick_tick(t);
++    if (!t->set.full_pad) {
++        pause_step(t);
++        air_layout_step(t);
++        if (t->trick.on) {
++            Finger *f = &t->f[t->trick.finger];
++            trick_step(t, f);
++            trick_tick(t);
++        }
+     }
+     due_presses(t);
+-    cross_track(t);
+-    tilt_step(t);
+-    hints_step(t);
++    if (!t->set.full_pad) {
++        cross_track(t);
++        tilt_step(t);
++        hints_step(t);
++    }
+     /* the pad read after this update has these presses: a lifted one lasts PRESS_FIELDS from now,
+        a pulse its fields */
+     if (!paused(t) && touch_visible(t))
+@@ -1902,11 +2004,28 @@ void touch_update(Touch *t, const TouchGame *game, double now)
+ 
+ static uint8_t axis(float v) { return (uint8_t)clampf(128.0f + v * 127.0f, 0, 255); }
+ 
++static int right_stick(const Touch *t, float *x, float *y, float *cx, float *cy)
++{
++    const Ctl *k = &t->ctl[TC_RSTICK];
++    *x = *y = 0;
++    *cx = k->x, *cy = k->y;
++    for (int i = 0; i < TOUCH_FINGERS; i++) {
++        const Finger *f = &t->f[i];
++        if (!f->used || f->job != JOB_RSTICK) continue;
++        if (!t->set.stick_fixed) *cx = f->x0, *cy = f->y0;
++        float range = k->r * 0.8f;
++        float dx = f->x - *cx, dy = f->y - *cy, length = hypotf(dx, dy);
++        if (length > range) dx *= range / length, dy *= range / length;
++        *x = dx / range, *y = dy / range;
++        return 1;
++    }
++    return 0;
++}
++
+ void touch_pad(const Touch *t, uint16_t *buttons, uint8_t *lx, uint8_t *ly, uint8_t *rx, uint8_t *ry)
+ {
+     uint16_t b = 0;
+     float sx = 0, sy = 0;
+-    (void)rx; (void)ry;
+     for (int i = 0; i < 16; i++) b |= t->pulse_buttons[i];
+     if (seq_busy(t) && t->seq_started) b |= t->seq[t->seq_at].buttons;
+     if (!paused(t) && touch_visible(t)) {
+@@ -1917,6 +2036,10 @@ void touch_pad(const Touch *t, uint16_t *buttons, uint8_t *lx, uint8_t *ly, uint
+         if (t->hold_cross_until > 0) b |= PAD_CROSS;
+         if (t->trick.on) b |= (uint16_t)(t->trick.sent | (t->trick.triangle ? PAD_TRIANGLE : 0));
+         if (t->stick_finger >= 0) sx = t->stick_dx, sy = t->stick_dy;
++        if (t->set.full_pad) {
++            float x, y, cx, cy;
++            if (right_stick(t, &x, &y, &cx, &cy)) *rx = axis(x), *ry = axis(y);
++        }
+         if (t->set.tilt && t->tilt_mix > 0) {   /* tilt steers left/right on the ground; the stick's left/right is ignored there */
+             float full = 40.0f - 30.0f * clampf((float)t->set.tilt_strength, 0, 100) / 100.0f;
+             float tilt = clampf((t->tilt_deg - t->set.tilt_centre) / full, -1, 1);
+@@ -1957,9 +2080,17 @@ void touch_free(Touch *t) { free(t); }
+ 
+ void touch_configure(Touch *t, const TouchSettings *s, const TouchScreen *screen)
+ {
+-    int preset_changed = s->preset != t->set.preset;
++    int preset = s->full_pad ? TOUCH_CLASSIC : s->preset;
++    int preset_changed = preset != t->set.preset || s->full_pad != t->set.full_pad;
+     int hints = t->set.hints_shown;
+     t->set = *s;
++    t->set.preset = preset;
++    if (t->set.full_pad) {
++        t->set.tilt = 0;
++        t->set.hints_shown = ~0u;
++        t->pause = PAUSE_NONE;
++        t->editor = 0;
++    }
+     if (t->saved) t->set.hints_shown |= hints;   /* a hint shown since the last save isn't lost */
+     if (screen && screen->width > 10 && screen->height > 10) t->screen = *screen;
+     if (preset_changed) drop_race_touches(t);
+@@ -2042,6 +2173,7 @@ static void draw_top_buttons(const Touch *t, Draw *d, int classic)
+ static void draw_stick(const Touch *t, Draw *d)
+ {
+     float range = (float)(t->set.stick_range > 0 ? t->set.stick_range : 12);
++    if (t->set.full_pad) range = t->ctl[TC_STICK].r * 0.8f;
+     float ring = fmaxf(range, t->ctl[TC_STICK].r * 0.8f);
+     uint32_t line = rgba(255, 255, 255, 0.5f * d->alpha), knob = rgba(255, 255, 255, 0.3f * d->alpha);
+     float cx = t->ctl[TC_STICK].x, cy = t->ctl[TC_STICK].y, kx = cx, ky = cy;
+@@ -2142,12 +2274,36 @@ static void draw_classic(const Touch *t, Draw *d)
+     button(d, &t->ctl[TC_CROSS], pressed_control(t, TC_CROSS), 1, TS_CROSS, "");
+     for (int c = TC_PLUS_LEFT; c <= TC_PLUS_RIGHT; c++) {
+         const Ctl *k = &t->ctl[c];
++        if (!k->on) continue;
+         put(d, TS_DISC, k->x, k->y, k->r, 0, 0, 0, rgba(10, 14, 18, 0.65f * d->alpha), rgba(255, 255, 255, 0.8f * d->alpha));
+         text(d, k->x, k->y, k->r * 1.1f, 0, "+", rgba(255, 255, 255, d->alpha));
+     }
+     draw_top_buttons(t, d, 1);
+ }
+ 
++static void draw_full_pad(const Touch *t, Draw *d)
++{
++    draw_classic(t, d);
++    const Ctl *p = &t->ctl[TC_DPAD], *r = &t->ctl[TC_RSTICK];
++    uint16_t buttons = 0;
++    uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
++    touch_pad(t, &buttons, &lx, &ly, &rx, &ry);
++    static const uint16_t bits[] = {PAD_UP, PAD_RIGHT, PAD_DOWN, PAD_LEFT};
++    static const int dx[] = {0, 1, 0, -1}, dy[] = {-1, 0, 1, 0};
++    for (int i = 0; i < 4; i++) {
++        float x = p->x + dx[i] * p->r * 0.6f, y = p->y + dy[i] * p->r * 0.6f;
++        uint32_t fill = buttons & bits[i] ? rgba(166, 227, 154, 0.65f*d->alpha) : rgba(10, 14, 18, 0.6f*d->alpha);
++        put(d, TS_RECT, x, y, p->r*0.29f, p->r*0.29f, p->r*0.08f, 0, fill, rgba(255, 255, 255, 0.8f*d->alpha));
++        uint32_t line = rgba(255, 255, 255, d->alpha);
++        if (i == 0 || i == 2) text(d, x, y, p->r * 0.30f, 0, i == 0 ? "^" : "v", line);
++        else put(d, TS_CHEVRON, x, y, p->r * 0.14f, 0, i == 1 ? 0 : PI_F, 0, 0, line);
++    }
++    float x, y, cx, cy, range = r->r * 0.8f;
++    int active = right_stick(t, &x, &y, &cx, &cy);
++    put(d, TS_DISC, cx, cy, range, 0, 0, 0, rgba(10,14,18,0.16f*d->alpha), rgba(255,255,255,(active ? 0.8f : 0.5f)*d->alpha));
++    put(d, TS_DISC, cx+x*range, cy+y*range, range*0.44f, 0, 0, 0, rgba(255,255,255,0.3f*d->alpha), rgba(255,255,255,0.85f*d->alpha));
++}
++
+ static void draw_panel_rows(const Touch *t, Draw *d)
+ {
+     float W = t->screen.width, H = t->screen.height;
+@@ -2309,6 +2465,7 @@ int touch_shapes(const Touch *t, TouchShape *out, int max)
+ {
+     Draw d = {out, 0, max, clampf(t->set.opacity / 100.0f, 0.1f, 1.0f)};
+     if (!touch_visible(t)) return 0;
++    if (t->set.full_pad) { draw_full_pad(t, &d); return d.n; }
+     if (t->editor) { draw_editor(t, &d); return d.n; }
+     if (t->set.preset == TOUCH_CLASSIC) draw_classic(t, &d);
+     else draw_thumb(t, &d);
+diff --git a/port/hle/touch.h b/port/hle/touch.h
+index 52c6a5f..e06ea7a 100644
+--- a/port/hle/touch.h
++++ b/port/hle/touch.h
+@@ -32,6 +32,7 @@ enum {
+     TC_LBAR, TC_RBAR, TC_L3, TC_R3,
+     TC_STICK,                                                       /* the steering stick's home */
+     TC_TRICK,                                                       /* the trick stick's faint spot */
++    TC_DPAD, TC_RSTICK,                                             /* standard mobile pad */
+     TC_COUNT
+ };
+ 
+@@ -54,6 +55,7 @@ typedef struct {
+     int attacks;          /* TOUCH_ATTACK_* */
+     int vibration;
+     int show_with_pad;    /* With a controller: 0 hide, 1 show */
++    int full_pad;         /* host capability: standard pad in menus and races, no HUD gate */
+     int tilt_strength;    /* percent */
+     float tilt_centre;    /* the tilt's zero, degrees */
+     unsigned hints_shown; /* TOUCH_HINT_* bits already shown (Show hints again clears them) */
+diff --git a/port/host/touch_host.c b/port/host/touch_host.c
+index 86c9325..4c079ea 100644
+--- a/port/host/touch_host.c
++++ b/port/host/touch_host.c
+@@ -51,8 +51,10 @@ static SDL_AtomicInt tilt_known;      /* tilt_milli is a reading since tilt went
+ static SDL_AtomicInt tilt_sensor;     /* 1 a tilt sensor, 0 none, -1 not known yet */
+ static TouchScreen screen;            /* under lock */
+ static int screen_known;
++static SDL_WindowID last_window;      /* the window whose physical layout was published */
+ 
+ static Touch *touch;                  /* the game thread's */
++static TouchScreen configured_screen; /* the dimensions used by the current layout */
+ static float published[TOUCH_SHAPES * 16];
+ static int published_count;
+ static float published_w, published_h;
+@@ -84,6 +86,7 @@ static int touch_on(void)
+         const char *enabled = getenv("DHD_TOUCH_ENABLED");
+         available = !enabled || atoi(enabled) != 0;
+         if (available) gs_mouse_touchscreen();
++        SDL_SetAtomicInt(&owns, available);  /* virtual pad owns the first menu touch too */
+         SDL_SetAtomicInt(&tilt_sensor, 0);
+ #else
+         const char *mouse = getenv("DHD_TOUCH_MOUSE");
+@@ -158,11 +161,11 @@ static void screen_update(SDL_Window *window)
+         screen_known = 2;   /* changed: the game thread lays out again */
+     }
+     SDL_UnlockMutex(lock);
++    last_window = SDL_GetWindowID(window);
+ }
+ 
+ /* ---- SDL thread ---- */
+ 
+-static long long last_window;
+ 
+ /* One SDL event: 1 when it is the touch controls' (the caller drops it). */
+ int touch_host_event(const SDL_Event *e)
+@@ -175,7 +178,7 @@ int touch_host_event(const SDL_Event *e)
+     case SDL_EVENT_FINGER_UP:
+     case SDL_EVENT_FINGER_CANCELED: {
+         SDL_Window *w = SDL_GetWindowFromID(e->tfinger.windowID);
+-        if (w && (long long)e->tfinger.windowID != last_window) { last_window = e->tfinger.windowID; screen_update(w); }
++        if (w && e->tfinger.windowID != last_window) screen_update(w);
+         int kind = e->type == SDL_EVENT_FINGER_DOWN ? EV_DOWN : e->type == SDL_EVENT_FINGER_MOTION ? EV_MOVE
+                  : e->type == SDL_EVENT_FINGER_UP ? EV_UP : EV_CANCEL;
+         push(kind, (long long)e->tfinger.fingerID, e->tfinger.x, e->tfinger.y, (double)e->common.timestamp / 1e6);
+@@ -191,7 +194,7 @@ int touch_host_event(const SDL_Event *e)
+             SDL_Window *w = SDL_GetWindowFromID(id);
+             int ww = 0, wh = 0;
+             if (!w || !SDL_GetWindowSize(w, &ww, &wh) || ww <= 0 || wh <= 0) return 0;
+-            if ((long long)id != last_window) { last_window = id; screen_update(w); }
++            if (id != last_window) screen_update(w);
+             float x = (e->type == SDL_EVENT_MOUSE_MOTION ? e->motion.x : e->button.x) / ww;
+             float y = (e->type == SDL_EVENT_MOUSE_MOTION ? e->motion.y : e->button.y) / wh;
+             double ms = (double)e->common.timestamp / 1e6;
+@@ -221,6 +224,7 @@ int touch_host_event(const SDL_Event *e)
+     case SDL_EVENT_JOYSTICK_REMOVED:
+         push(EV_PAD_LOST, 0, 0, 0, (double)e->common.timestamp / 1e6);
+         return 0;
++    case SDL_EVENT_WINDOW_SHOWN:
+     case SDL_EVENT_WINDOW_RESIZED:
+     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+     case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
+@@ -239,6 +243,14 @@ int touch_host_event(const SDL_Event *e)
+ void touch_host_tick(void)
+ {
+     if (!touch_on()) return;
++#ifdef DHD_IOS
++    if (!last_window && (SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO)) {
++        int count = 0;
++        SDL_Window **windows = SDL_GetWindows(&count);
++        if (windows && count) screen_update(windows[0]);
++        SDL_free(windows);
++    }
++#endif
+     int buzz = SDL_GetAtomicInt(&want_buzz);
+     if (buzz) SDL_SetAtomicInt(&want_buzz, 0);
+ #ifdef __ANDROID__
+@@ -290,9 +302,14 @@ static void settings_read(TouchSettings *s)
+     static const char *const stick[] = {"floating", "fixed"}, *const labels[] = {"auto", "always", "off"};
+     static const char *const attacks[] = {"flick", "buttons"}, *const pad[] = {"hide", "show"}, *const hud[] = {"game", "move"};
+     touch_settings_default(s);
++#ifdef DHD_IOS
++    s->full_pad = 1;
++#endif
+     s->preset = env_choice("DHD_TOUCH_PRESET", preset, 2, TOUCH_CLASSIC);  /* the full pad by default */
++    if (s->full_pad) s->preset = TOUCH_CLASSIC;
+     s->left_handed = env_choice("DHD_TOUCH_HAND", hand, 2, 0);
+     s->tilt = env_choice("DHD_TOUCH_STEER", steer, 2, 0);
++    if (s->full_pad) s->tilt = 0;
+     const char *size = getenv("DHD_TOUCH_SIZE");
+     s->size = size && atoi(size) > 0 ? env_int("DHD_TOUCH_SIZE", 100, 50, 150) : 0;
+     s->opacity = env_int("DHD_TOUCH_OPACITY", 60, 10, 100);
+@@ -341,6 +358,7 @@ static void configure(int log)
+     if (screen_known == 2) screen_known = 1;
+     SDL_UnlockMutex(lock);
+     touch_configure(touch, &s, known ? &sc : NULL);
++    if (known) configured_screen = sc;
+     SDL_SetAtomicInt(&tilt_wanted, s.tilt);
+     if (log && known)   /* before the window's size is known there is nothing to say */
+         fprintf(stderr, "touch: %s, %s hand, %s, size %s, screen %.1f x %.1f mm (strips l %.1f t %.1f r %.1f b %.1f mm, "
+@@ -365,7 +383,7 @@ static void publish(void)
+         }
+     }
+     published_count = n;
+-    published_w = screen.width, published_h = screen.height;
++    published_w = configured_screen.width, published_h = configured_screen.height;
+     SDL_UnlockMutex(lock);
+ }
+ 
+@@ -394,6 +412,7 @@ void host_service_touch_field(uint32_t address)
+     static int set_up;
+     if (!touch) {
+         touch = touch_new();
++        if (!touch) return;
+ #ifdef DHD_IOS
+         host_putenv_s("DHD_TOUCH", "ios");
+ #else
+@@ -426,8 +445,8 @@ void host_service_touch_field(uint32_t address)
+     memcpy(events, queue.ev, sizeof *events * (size_t)n);
+     merged = queue.merged, cancelled = queue.cancelled;
+     queue.count = queue.merged = queue.cancelled = 0;
+-    TouchScreen sc = screen;
+     SDL_UnlockMutex(lock);
++    TouchScreen sc = configured_screen;
+     if (cancelled) fprintf(stderr, "touch: the touch queue filled while the game waited; every finger was let go\n");
+     else if (merged && trace_on()) fprintf(stderr, "touch log: the queue filled; %d moves merged\n", merged);
+     for (int i = 0; i < n; i++) {
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+index 5317326..a4fa5ce 100644
+--- a/port/ios/launcher.m
++++ b/port/ios/launcher.m
+@@ -2,7 +2,6 @@
+ #import <UIKit/UIKit.h>
+ #import <QuartzCore/QuartzCore.h>
+ #include <SDL3/SDL.h>
+-#include <math.h>
+ #include <stdio.h>
+ #include "launcher.h"
+ #include "../render/include/dhd_settings.h"
+@@ -41,75 +40,6 @@ static BOOL DHDEnabled(NSString *value)
+     return ![@[@"0", @"off", @"false", @"no"] containsObject:value.lowercaseString];
+ }
+ 
+-@interface DHDBackdrop : UIView
+-@end
+-
+-@implementation DHDBackdrop
+-- (instancetype)init
+-{
+-    self = [super init];
+-    if (self) {
+-        self.backgroundColor = DHDColor(0x020611, 1);
+-        self.userInteractionEnabled = NO;
+-        CALayer *halo = [CALayer layer];
+-        halo.name = @"halo";
+-        halo.backgroundColor = DHDColor(0x0578FF, 0.1).CGColor;
+-        halo.shadowColor = DHDColor(0x3A92FF, 1).CGColor;
+-        halo.shadowOpacity = 0.45;
+-        halo.shadowRadius = 65;
+-        [self.layer addSublayer:halo];
+-        if (!UIAccessibilityIsReduceMotionEnabled()) {
+-            CABasicAnimation *breath = [CABasicAnimation animationWithKeyPath:@"opacity"];
+-            breath.fromValue = @0.35;
+-            breath.toValue = @1;
+-            breath.duration = 4;
+-            breath.autoreverses = YES;
+-            breath.repeatCount = HUGE_VALF;
+-            [halo addAnimation:breath forKey:@"breath"];
+-        }
+-    }
+-    return self;
+-}
+-
+-- (void)layoutSubviews
+-{
+-    [super layoutSubviews];
+-    CALayer *halo = self.layer.sublayers.firstObject;
+-    CGFloat diameter = self.bounds.size.height * 0.8;
+-    halo.frame = CGRectMake(-diameter * 0.2, -diameter * 0.3, diameter, diameter);
+-    halo.cornerRadius = diameter / 2;
+-    [self setNeedsDisplay];
+-}
+-
+-- (void)drawRect:(CGRect)rect
+-{
+-    CGContextRef context = UIGraphicsGetCurrentContext();
+-    CGFloat width = rect.size.width, height = rect.size.height;
+-    for (int i = 0; i < 17; i++) {
+-        CGFloat x = width * (i / 17.0);
+-        CGFloat towerWidth = MAX(12, width / 35);
+-        CGFloat towerHeight = height * (0.14 + ((i * 7) % 11) / 26.0);
+-        CGFloat y = height - towerHeight;
+-        CGContextSetFillColorWithColor(context, DHDColor(0x123268, 0.20).CGColor);
+-        CGContextFillRect(context, CGRectMake(x, y, towerWidth, towerHeight));
+-        UIBezierPath *top = [UIBezierPath bezierPath];
+-        [top moveToPoint:CGPointMake(x, y)];
+-        [top addLineToPoint:CGPointMake(x + towerWidth / 2, y - towerWidth / 3)];
+-        [top addLineToPoint:CGPointMake(x + towerWidth * 1.5, y - towerWidth / 3)];
+-        [top addLineToPoint:CGPointMake(x + towerWidth, y)];
+-        [top closePath];
+-        [DHDColor(0x3678CB, 0.22) setFill];
+-        [top fill];
+-    }
+-    for (int i = 0; i < 40; i++) {
+-        CGFloat x = width * (((i * 37) % 101) / 101.0);
+-        CGFloat y = height * (((i * 19) % 97) / 97.0);
+-        CGContextSetFillColorWithColor(context, DHDColor(0x7EB8FF, i % 3 ? 0.13 : 0.35).CGColor);
+-        CGContextFillEllipseInRect(context, CGRectMake(x, y, 2, 2));
+-    }
+-}
+-@end
+-
+ @interface DHDLauncher : UIViewController
+ @property(nonatomic, copy) NSString *disc;
+ @property(nonatomic, copy) NSString *settingsPath;
+@@ -118,11 +48,15 @@ static BOOL DHDEnabled(NSString *value)
+ @property(nonatomic, strong) NSTimer *controllerTimer;
+ @property(nonatomic, strong) UIStackView *rows;
+ @property(nonatomic, strong) UISegmentedControl *tabs;
++@property(nonatomic, strong) UIScrollView *settingsScroll;
+ @property(nonatomic, strong) UILabel *summary;
+ @property(nonatomic, strong) UILabel *discStatus;
+ @property(nonatomic, strong) UIButton *playButton;
+ @property(nonatomic, weak) UIButton *gamepadButton;
+ @property(nonatomic, copy) NSString *menuSelection;
++@property(nonatomic, strong) UIView *catalogView;
++@property(nonatomic, strong) UIView *settingsView;
++@property(nonatomic, strong) NSLayoutConstraint *coverSize;
+ @property(nonatomic) BOOL wantsPlay;
+ @end
+ 
+@@ -148,166 +82,203 @@ static BOOL DHDEnabled(NSString *value)
+ {
+     [super viewDidLoad];
+     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
++    self.view.backgroundColor = DHDColor(0x111214, 1);
+     self.values = [NSMutableDictionary dictionary];
+     self.pads = @[];
+-    DHDBackdrop *backdrop = [[DHDBackdrop alloc] init];
+-    backdrop.frame = self.view.bounds;
+-    backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+-    [self.view addSubview:backdrop];
+-
+-    UIView *content = [[UIView alloc] init];
+-    content.translatesAutoresizingMaskIntoConstraints = NO;
+-    [self.view addSubview:content];
+     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
++    UIView *catalog = [[UIView alloc] init];
++    self.catalogView = catalog;
++    catalog.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.view addSubview:catalog];
+     [NSLayoutConstraint activateConstraints:@[
+-        [content.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+-        [content.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12],
+-        [content.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-12],
+-        [content.widthAnchor constraintLessThanOrEqualToConstant:1120],
+-        [content.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor constant:20],
+-        [content.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor constant:-20],
++        [catalog.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
++        [catalog.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
++        [catalog.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
++        [catalog.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8],
+     ]];
+-    NSLayoutConstraint *fillWidth = [content.widthAnchor constraintEqualToAnchor:safe.widthAnchor constant:-40];
+-    fillWidth.priority = UILayoutPriorityDefaultHigh;
+-    fillWidth.active = YES;
+ 
+-    UILabel *brand = DHDLabel(@"PS2", 30, UIFontWeightUltraLight);
+-    brand.attributedText = [[NSAttributedString alloc] initWithString:@"PS2"
+-        attributes:@{NSKernAttributeName:@7, NSForegroundColorAttributeName:DHDColor(0x89BEFF, 1)}];
+-    UILabel *identity = DHDLabel(@"NATIVE  /  iSOLUTION", 10, UIFontWeightSemibold);
+-    identity.textColor = DHDColor(0x7C96BB, 1);
+-    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[brand, identity]];
+-    header.spacing = 15;
+-    header.alignment = UIStackViewAlignmentCenter;
+-    header.translatesAutoresizingMaskIntoConstraints = NO;
+-    [content addSubview:header];
++    UILabel *heading = DHDLabel(@"Library", 25, UIFontWeightBold);
++    heading.translatesAutoresizingMaskIntoConstraints = NO;
++    [catalog addSubview:heading];
++    UIButtonConfiguration *gearConfig = [UIButtonConfiguration plainButtonConfiguration];
++    gearConfig.image = [UIImage systemImageNamed:@"gearshape"];
++    gearConfig.title = @"Settings";
++    gearConfig.imagePadding = 8;
++    gearConfig.baseForegroundColor = DHDColor(0xD5D8DC, 1);
++    UIButton *gear = [UIButton buttonWithConfiguration:gearConfig primaryAction:nil];
++    gear.translatesAutoresizingMaskIntoConstraints = NO;
++    [gear addTarget:self action:@selector(showSettings) forControlEvents:UIControlEventTouchUpInside];
++    [catalog addSubview:gear];
+ 
+-    self.discStatus = DHDLabel(@"Checking disc…", 11, UIFontWeightMedium);
+-    self.discStatus.translatesAutoresizingMaskIntoConstraints = NO;
+-    [content addSubview:self.discStatus];
++    UIView *card = [[UIView alloc] init];
++    card.backgroundColor = DHDColor(0x202226, 1);
++    card.layer.cornerRadius = 13;
++    card.layer.borderWidth = 2;
++    card.layer.borderColor = DHDColor(0x59D1D9, 1).CGColor;
++    card.translatesAutoresizingMaskIntoConstraints = NO;
++    card.isAccessibilityElement = YES;
++    card.accessibilityLabel = @"Downhill Domination, selected game";
++    [catalog addSubview:card];
++    UIImage *art = [UIImage imageNamed:@"GameIcon.png"];
++    UIImageView *cover = [[UIImageView alloc] initWithImage:art ?: [UIImage systemImageNamed:@"gamecontroller.fill"]];
++    cover.contentMode = UIViewContentModeScaleAspectFill;
++    cover.backgroundColor = DHDColor(0x30343A, 1);
++    cover.tintColor = DHDColor(0xA9B1BC, 1);
++    cover.layer.cornerRadius = 8;
++    cover.clipsToBounds = YES;
++    cover.translatesAutoresizingMaskIntoConstraints = NO;
++    [card addSubview:cover];
++    self.coverSize = [cover.heightAnchor constraintEqualToConstant:160];
++    self.coverSize.active = YES;
++    UILabel *cardTitle = DHDLabel(@"Downhill Domination", 12, UIFontWeightSemibold);
++    cardTitle.translatesAutoresizingMaskIntoConstraints = NO;
++    cardTitle.numberOfLines = 2;
++    [card addSubview:cardTitle];
+ 
+-    UIScrollView *heroScroll = [[UIScrollView alloc] init];
+-    heroScroll.showsVerticalScrollIndicator = NO;
+-    heroScroll.translatesAutoresizingMaskIntoConstraints = NO;
+-    [content addSubview:heroScroll];
+-    UIImageView *discImage = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"opticaldisc.fill"]];
+-    discImage.tintColor = DHDColor(0x6DAFFF, 0.9);
+-    discImage.contentMode = UIViewContentModeScaleAspectFit;
+-    [discImage.heightAnchor constraintEqualToConstant:58].active = YES;
+-    UILabel *edition = DHDLabel(@"PLAYSTATION 2  •  USA", 9, UIFontWeightSemibold);
+-    edition.textColor = DHDColor(0x75A9E5, 1);
+-    UILabel *title = DHDLabel(@"Downhill\nDomination", 29, UIFontWeightBold);
+-    title.adjustsFontSizeToFitWidth = YES;
+-    title.minimumScaleFactor = 0.8;
+-    UILabel *serial = DHDLabel(@"SCUS-97177", 10, UIFontWeightMedium);
+-    serial.textColor = DHDColor(0x7187A6, 1);
+-    self.summary = DHDLabel(@"", 12, UIFontWeightRegular);
+-    self.summary.textColor = DHDColor(0xA8BFD9, 1);
+-    UIStackView *hero = [[UIStackView alloc] initWithArrangedSubviews:@[discImage, edition, title, serial, self.summary]];
+-    hero.axis = UILayoutConstraintAxisVertical;
+-    hero.alignment = UIStackViewAlignmentLeading;
+-    hero.spacing = 9;
+-    hero.translatesAutoresizingMaskIntoConstraints = NO;
+-    [heroScroll addSubview:hero];
++    UILabel *title = DHDLabel(@"Downhill Domination", 19, UIFontWeightSemibold);
++    self.discStatus = DHDLabel(@"", 11, UIFontWeightRegular);
++    self.summary = DHDLabel(@"", 10, UIFontWeightRegular);
++    self.summary.textColor = DHDColor(0x9CA5AE, 1);
++    UIStackView *details = [[UIStackView alloc] initWithArrangedSubviews:@[title, self.discStatus, self.summary]];
++    details.axis = UILayoutConstraintAxisVertical;
++    details.spacing = 3;
++    details.translatesAutoresizingMaskIntoConstraints = NO;
++    [catalog addSubview:details];
++    UIButtonConfiguration *playConfig = [UIButtonConfiguration filledButtonConfiguration];
++    playConfig.title = @"Play";
++    playConfig.image = [UIImage systemImageNamed:@"play.fill"];
++    playConfig.imagePadding = 10;
++    playConfig.baseBackgroundColor = DHDColor(0xE8F8F8, 1);
++    playConfig.baseForegroundColor = DHDColor(0x101C1D, 1);
++    playConfig.cornerStyle = UIButtonConfigurationCornerStyleMedium;
++    self.playButton = [UIButton buttonWithConfiguration:playConfig primaryAction:nil];
++    self.playButton.accessibilityLabel = @"Play Downhill Domination";
++    self.playButton.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
++    [catalog addSubview:self.playButton];
+     [NSLayoutConstraint activateConstraints:@[
+-        [hero.leadingAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.leadingAnchor],
+-        [hero.trailingAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.trailingAnchor],
+-        [hero.topAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.topAnchor constant:12],
+-        [hero.bottomAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.bottomAnchor constant:-12],
+-        [hero.widthAnchor constraintEqualToAnchor:heroScroll.frameLayoutGuide.widthAnchor],
+-        [discImage.widthAnchor constraintEqualToConstant:58],
++        [heading.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
++        [heading.topAnchor constraintEqualToAnchor:catalog.topAnchor],
++        [heading.heightAnchor constraintEqualToConstant:38],
++        [gear.trailingAnchor constraintEqualToAnchor:catalog.trailingAnchor],
++        [gear.centerYAnchor constraintEqualToAnchor:heading.centerYAnchor],
++        [gear.heightAnchor constraintGreaterThanOrEqualToConstant:44],
++        [card.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
++        [card.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:12],
++        [cover.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:8],
++        [cover.topAnchor constraintEqualToAnchor:card.topAnchor constant:8],
++        [cover.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-8],
++        [cover.widthAnchor constraintEqualToAnchor:cover.heightAnchor],
++        [cardTitle.leadingAnchor constraintEqualToAnchor:cover.leadingAnchor constant:2],
++        [cardTitle.trailingAnchor constraintEqualToAnchor:cover.trailingAnchor constant:-2],
++        [cardTitle.topAnchor constraintEqualToAnchor:cover.bottomAnchor constant:5],
++        [cardTitle.heightAnchor constraintEqualToConstant:30],
++        [cardTitle.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-7],
++        [details.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
++        [details.trailingAnchor constraintLessThanOrEqualToAnchor:self.playButton.leadingAnchor constant:-20],
++        [details.centerYAnchor constraintEqualToAnchor:self.playButton.centerYAnchor],
++        [self.playButton.trailingAnchor constraintEqualToAnchor:catalog.trailingAnchor],
++        [self.playButton.bottomAnchor constraintEqualToAnchor:catalog.bottomAnchor],
++        [self.playButton.widthAnchor constraintEqualToConstant:150],
++        [self.playButton.heightAnchor constraintEqualToConstant:52],
+     ]];
++    [self makeSettingsPage];
++    [self value:@"ios_gamepad" fallback:@"auto"];
++    [self value:@"touch_enabled" fallback:@"1"];
++    [self refreshControllers];
++    [self changeTab:self.tabs];
++    [self checkDisc];
++    __weak DHDLauncher *weakSelf = self;
++    self.controllerTimer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
++        (void)timer;
++        [weakSelf refreshControllers];
++    }];
++    [[NSRunLoop mainRunLoop] addTimer:self.controllerTimer forMode:NSRunLoopCommonModes];
++}
+ 
+-    UIView *panel = [[UIView alloc] init];
+-    panel.backgroundColor = DHDColor(0x0C172C, 0.93);
+-    panel.layer.cornerRadius = 20;
+-    panel.layer.borderWidth = 1;
+-    panel.layer.borderColor = DHDColor(0x7AAEFF, 0.14).CGColor;
+-    panel.clipsToBounds = YES;
+-    panel.translatesAutoresizingMaskIntoConstraints = NO;
+-    [content addSubview:panel];
+-    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"Graphics", @"Controls", @"Performance"]];
+-    self.tabs = tabs;
+-    tabs.selectedSegmentIndex = 0;
+-    tabs.selectedSegmentTintColor = DHDColor(0x254978, 1);
+-    tabs.translatesAutoresizingMaskIntoConstraints = NO;
+-    [tabs addTarget:self action:@selector(changeTab:) forControlEvents:UIControlEventValueChanged];
+-    [panel addSubview:tabs];
++- (void)viewDidLayoutSubviews
++{
++    [super viewDidLayoutSubviews];
++    CGFloat height = self.view.safeAreaLayoutGuide.layoutFrame.size.height;
++    CGFloat side = MAX(90, MIN(220, height - 194));
++    if (self.coverSize.constant != side) self.coverSize.constant = side;
++}
++
++- (void)makeSettingsPage
++{
++    UIView *page = [[UIView alloc] init];
++    self.settingsView = page;
++    page.backgroundColor = self.view.backgroundColor;
++    page.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.view addSubview:page];
++    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
++    UILabel *heading = DHDLabel(@"Settings", 22, UIFontWeightBold);
++    heading.translatesAutoresizingMaskIntoConstraints = NO;
++    [page addSubview:heading];
++    UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
++    [done setTitle:@"Done" forState:UIControlStateNormal];
++    done.tintColor = DHDColor(0x72D7DB, 1);
++    done.translatesAutoresizingMaskIntoConstraints = NO;
++    [done addTarget:self action:@selector(closeSettings) forControlEvents:UIControlEventTouchUpInside];
++    [page addSubview:done];
++    self.tabs = [[UISegmentedControl alloc] initWithItems:@[@"Graphics", @"Controls", @"Performance"]];
++    self.tabs.selectedSegmentIndex = 0;
++    self.tabs.selectedSegmentTintColor = DHDColor(0x354245, 1);
++    self.tabs.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.tabs addTarget:self action:@selector(changeTab:) forControlEvents:UIControlEventValueChanged];
++    [page addSubview:self.tabs];
+     UIScrollView *scroll = [[UIScrollView alloc] init];
++    self.settingsScroll = scroll;
+     scroll.alwaysBounceVertical = YES;
+     scroll.translatesAutoresizingMaskIntoConstraints = NO;
+-    [panel addSubview:scroll];
++    [page addSubview:scroll];
+     self.rows = [[UIStackView alloc] init];
+     self.rows.axis = UILayoutConstraintAxisVertical;
+     self.rows.translatesAutoresizingMaskIntoConstraints = NO;
+     [scroll addSubview:self.rows];
+-
+-    UIButtonConfiguration *configuration = [UIButtonConfiguration filledButtonConfiguration];
+-    configuration.title = @"Play game";
+-    configuration.image = [UIImage systemImageNamed:@"play.fill"];
+-    configuration.imagePadding = 12;
+-    configuration.baseBackgroundColor = DHDColor(0x91C5FF, 1);
+-    configuration.baseForegroundColor = DHDColor(0x031326, 1);
+-    configuration.cornerStyle = UIButtonConfigurationCornerStyleLarge;
+-    self.playButton = [UIButton buttonWithConfiguration:configuration primaryAction:nil];
+-    self.playButton.accessibilityLabel = @"Play Downhill Domination";
+-    self.playButton.translatesAutoresizingMaskIntoConstraints = NO;
+-    [self.playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
+-    [content addSubview:self.playButton];
+-    UIButton *check = [UIButton buttonWithType:UIButtonTypeSystem];
+-    [check setTitle:@"Check ISO" forState:UIControlStateNormal];
+-    check.tintColor = DHDColor(0xA2C7F7, 1);
+-    check.translatesAutoresizingMaskIntoConstraints = NO;
+-    [check addTarget:self action:@selector(checkDisc) forControlEvents:UIControlEventTouchUpInside];
+-    [content addSubview:check];
+-
+     [NSLayoutConstraint activateConstraints:@[
+-        [header.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+-        [header.topAnchor constraintEqualToAnchor:content.topAnchor],
+-        [header.heightAnchor constraintEqualToConstant:38],
+-        [self.discStatus.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+-        [self.discStatus.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+-        [self.discStatus.leadingAnchor constraintGreaterThanOrEqualToAnchor:header.trailingAnchor constant:12],
+-        [self.playButton.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+-        [self.playButton.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+-        [self.playButton.heightAnchor constraintEqualToConstant:50],
+-        [self.playButton.widthAnchor constraintEqualToAnchor:panel.widthAnchor],
+-        [check.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+-        [check.centerYAnchor constraintEqualToAnchor:self.playButton.centerYAnchor],
+-        [check.heightAnchor constraintGreaterThanOrEqualToConstant:44],
+-        [heroScroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+-        [heroScroll.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:12],
+-        [heroScroll.bottomAnchor constraintEqualToAnchor:self.playButton.topAnchor constant:-12],
+-        [heroScroll.widthAnchor constraintEqualToAnchor:content.widthAnchor multiplier:0.31],
+-        [panel.leadingAnchor constraintEqualToAnchor:heroScroll.trailingAnchor constant:20],
+-        [panel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+-        [panel.topAnchor constraintEqualToAnchor:heroScroll.topAnchor],
+-        [panel.bottomAnchor constraintEqualToAnchor:heroScroll.bottomAnchor],
+-        [tabs.topAnchor constraintEqualToAnchor:panel.topAnchor constant:14],
+-        [tabs.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
+-        [tabs.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
+-        [tabs.heightAnchor constraintEqualToConstant:34],
+-        [scroll.topAnchor constraintEqualToAnchor:tabs.bottomAnchor constant:8],
+-        [scroll.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor],
+-        [scroll.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
+-        [scroll.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor],
+-        [self.rows.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:16],
+-        [self.rows.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-16],
++        [page.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
++        [page.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
++        [page.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
++        [page.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8],
++        [heading.leadingAnchor constraintEqualToAnchor:page.leadingAnchor],
++        [heading.topAnchor constraintEqualToAnchor:page.topAnchor],
++        [heading.heightAnchor constraintEqualToConstant:40],
++        [done.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
++        [done.centerYAnchor constraintEqualToAnchor:heading.centerYAnchor],
++        [done.heightAnchor constraintGreaterThanOrEqualToConstant:44],
++        [self.tabs.leadingAnchor constraintEqualToAnchor:page.leadingAnchor],
++        [self.tabs.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
++        [self.tabs.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:8],
++        [self.tabs.heightAnchor constraintEqualToConstant:34],
++        [scroll.leadingAnchor constraintEqualToAnchor:page.leadingAnchor],
++        [scroll.trailingAnchor constraintEqualToAnchor:page.trailingAnchor],
++        [scroll.topAnchor constraintEqualToAnchor:self.tabs.bottomAnchor constant:8],
++        [scroll.bottomAnchor constraintEqualToAnchor:page.bottomAnchor],
++        [self.rows.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
++        [self.rows.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+         [self.rows.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+         [self.rows.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-12],
+-        [self.rows.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-32],
++        [self.rows.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+     ]];
+-    [self value:@"ios_gamepad" fallback:@"auto"];
+-    [self value:@"touch_enabled" fallback:@"1"];
++    page.hidden = YES;
++}
++
++- (void)showSettings
++{
++    self.catalogView.hidden = YES;
++    self.settingsView.hidden = NO;
+     [self refreshControllers];
+-    [self changeTab:tabs];
++    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, self.tabs);
++}
++
++- (void)closeSettings
++{
++    self.settingsView.hidden = YES;
++    self.catalogView.hidden = NO;
++    [self refreshSummary];
+     [self checkDisc];
+-    __weak DHDLauncher *weakSelf = self;
+-    self.controllerTimer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
+-        (void)timer;
+-        [weakSelf refreshControllers];
+-    }];
+-    [[NSRunLoop mainRunLoop] addTimer:self.controllerTimer forMode:NSRunLoopCommonModes];
++    UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, self.playButton);
+ }
+ 
+ - (UIView *)row:(NSString *)title control:(UIView *)control
+@@ -393,6 +364,7 @@ static BOOL DHDEnabled(NSString *value)
+ 
+ - (void)changeTab:(UISegmentedControl *)sender
+ {
++    [self.settingsScroll setContentOffset:CGPointZero animated:NO];
+     for (UIView *view in self.rows.arrangedSubviews.copy) {
+         [self.rows removeArrangedSubview:view];
+         [view removeFromSuperview];
+@@ -412,8 +384,6 @@ static BOOL DHDEnabled(NSString *value)
+         [self toggle:@"Particle effects" key:@"particles" fallback:@"1"];
+     } else if (sender.selectedSegmentIndex == 1) {
+         [self toggle:@"Virtual controller" key:@"touch_enabled" fallback:@"1"];
+-        [self choice:@"Touch layout" key:@"touch_preset" values:@[@"classic", @"thumb"]
+-              labels:@[@"Classic pad", @"Thumb zones"] fallback:@"classic"];
+         [self choice:@"Button size" key:@"touch_size" values:@[@"auto", @"70", @"85", @"100", @"105"]
+               labels:@[@"Auto", @"70%", @"85%", @"100%", @"105%"] fallback:@"auto"];
+         [self choice:@"Button opacity" key:@"touch_opacity" values:@[@"25", @"40", @"60", @"80", @"100"]
+@@ -437,7 +407,6 @@ static BOOL DHDEnabled(NSString *value)
+         [self choice:@"Stick dead zone" key:@"stick_dead_zone" values:@[@"game", @"5", @"10", @"15", @"20"]
+               labels:@[@"Game default", @"5%", @"10%", @"15%", @"20%"] fallback:@"game"];
+         [self toggle:@"Gamepad vibration" key:@"vibration" fallback:@"1"];
+-        [self toggle:@"Touch haptics" key:@"touch_vibration" fallback:@"1"];
+     } else {
+         [self choice:@"FPS limit" key:@"fps" values:@[@"30", @"60", @"120", @"monitor"]
+               labels:@[@"30 FPS", @"60 FPS", @"120 FPS", @"Auto · display"] fallback:@"60"];
+@@ -452,15 +421,10 @@ static BOOL DHDEnabled(NSString *value)
+ 
+ - (void)refreshSummary
+ {
+-    NSString *scale = [self value:@"scale" fallback:@"2"];
+     NSString *fps = [self value:@"fps" fallback:@"60"];
+-    BOOL native = [[self value:@"renderer" fallback:@"native"] isEqualToString:@"native"];
+-    NSString *size = [scale isEqualToString:@"window"] ? @"Display resolution" : [scale stringByAppendingString:@"× resolution"];
+-    if (!native) size = @"Exact rendering";
+-    NSString *rate = [fps isEqualToString:@"monitor"] ? @"Display FPS" : [fps stringByAppendingString:@" FPS limit"];
++    NSString *rate = [fps isEqualToString:@"monitor"] ? @"Auto FPS" : [fps stringByAppendingString:@" FPS"];
+     BOOL touch = DHDEnabled([self value:@"touch_enabled" fallback:@"1"]);
+-    self.summary.text = [NSString stringWithFormat:@"%@\n%@\n%@", size, rate,
+-                        touch ? @"Virtual controller ready" : @"Gamepad controls"];
++    self.summary.text = [NSString stringWithFormat:@"%@  ·  %@", touch ? @"Touch controls on" : @"Gamepad controls", rate];
+ }
+ 
+ - (void)refreshControllers
+@@ -520,8 +484,7 @@ static BOOL DHDEnabled(NSString *value)
+ - (void)checkDisc
+ {
+     const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
+-    self.playButton.enabled = problem == NULL;
+-    self.discStatus.text = problem ? @"ISO needed  •  SCUS-97177.iso" : @"●  DISC READY  •  METAL";
++    self.discStatus.text = problem ? @"ISO needed  •  SCUS-97177.iso" : @"Ready to play";
+     self.discStatus.textColor = DHDColor(problem ? 0xD7AE76 : 0x8BD9CE, 1);
+ }
+ 
+@@ -530,7 +493,7 @@ static BOOL DHDEnabled(NSString *value)
+     const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
+     if (problem) {
+         [self alert:@"Original disc required"
+-            message:[NSString stringWithFormat:@"%s\n\nPut SCUS-97177.iso in Files → On My iPhone → Downhill Revived, then tap Check ISO.", problem]];
++            message:[NSString stringWithFormat:@"%s\n\nPut SCUS-97177.iso in Files → On My iPhone → Downhill Revived, then tap Play again.", problem]];
+         return;
+     }
+     [self refreshControllers];
+@@ -547,6 +510,7 @@ static BOOL DHDEnabled(NSString *value)
+         return;
+     }
+     self.values[@"iso"] = self.disc;
++    self.values[@"touch_preset"] = @"classic";
+     for (NSString *key in self.values) {
+         if (!dhd_settings_save(self.settingsPath.fileSystemRepresentation, key.UTF8String, self.values[key].UTF8String)) {
+             [self alert:@"Settings could not be saved" message:@"Check available storage, then tap Play again."];

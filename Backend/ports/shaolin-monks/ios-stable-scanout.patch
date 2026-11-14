@@ -1,0 +1,503 @@
+diff --git a/ps2xRuntime/include/runtime/gs/gs_types.h b/ps2xRuntime/include/runtime/gs/gs_types.h
+--- a/ps2xRuntime/include/runtime/gs/gs_types.h
++++ b/ps2xRuntime/include/runtime/gs/gs_types.h
+@@ -288,6 +288,8 @@
+     GSFrameReg preferredSource{};
+     uint32_t preferredDestFbp = 0;
+     bool hasPreferredSource = false;
++    bool useContextFallback = true;
++    bool interpolateFields = false;
+ };
+ 
+ struct PresentationFrame
+diff --git a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+--- a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+@@ -22,6 +22,7 @@
+     void TextureFlush() override;
+     void Sync(GSSyncReason reason) override;
+     PresentationFrame Present(const GSPresentationRequest &request) override;
++    static PresentationFrame PresentSnapshot(const GSPresentationRequest &request, std::vector<uint8_t> &snapshot);
+ 
+     bool ClearFramebuffer(const GSContext &context, uint32_t rgba) override;
+     uint32_t ConsumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes) override;
+diff --git a/ps2xRuntime/include/runtime/gs/gs_frontend.h b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+--- a/ps2xRuntime/include/runtime/gs/gs_frontend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+@@ -7,6 +7,7 @@
+ #include <cstdint>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include <vector>
+ 
+ #include "runtime/gs/gs_backend.h"
+@@ -131,6 +132,10 @@
+     void setDebugHistoryPaused(bool paused);
+     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
+     void latchHostPresentationFrame();
++#if defined(PS2APPLE_IOS)
++    std::optional<PresentationFrame> tryHostPresentationFrame(std::mutex &displayMutex, uint64_t &capturedTick,
++                                                             bool useContextFallback, bool weave);
++#endif
+     bool copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+                                           uint32_t &outWidth,
+                                           uint32_t &outHeight,
+diff --git a/ps2xRuntime/include/runtime/gs/gs_field_weaver.h b/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
+--- a/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
++++ b/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
+@@ -3,21 +3,23 @@
+ #include <algorithm>
+ #include <cstring>
+ 
+-// Retain alternate scanlines when a half-height interlaced field arrives.
+-// History belongs to the GS instance, not the transient VRAM snapshot backend.
++// A field may be woven only with its consecutive neighbour and matching display geometry.
+ class GSFieldWeaver {
+     PresentationFrame history;
+-    uint64_t mode = 0;
++    GSPresentationRequest previous{};
+ public:
+-    void reset() { history = {}; mode = 0; }
+-    void apply(PresentationFrame& frame, const GSPresentationRequest& request) {
+-        if ((request.smode2 & 3u) != 3u || !frame) { reset(); return; }
+-        const uint64_t newMode = request.pmode;
+-        if (!history || history.width != frame.width || history.height != frame.height || mode != newMode) {
+-            history = frame;
+-            mode = newMode;
+-            return;
+-        }
++    void reset() { history = {}; previous = {}; }
++    void apply(PresentationFrame &frame, const GSPresentationRequest &request) {
++        if (!(request.smode2 & 1u) || !frame) { reset(); return; }
++        constexpr uint64_t geometryMask = ~0x1ffull; // FBP can alternate on each field.
++        bool matching = history && history.width == frame.width && history.height == frame.height &&
++            previous.vsyncTick + 1 == request.vsyncTick && previous.pmode == request.pmode &&
++            previous.smode2 == request.smode2 && previous.display1 == request.display1 &&
++            previous.display2 == request.display2 &&
++            ((previous.dispfb1 ^ request.dispfb1) & geometryMask) == 0 &&
++            ((previous.dispfb2 ^ request.dispfb2) & geometryMask) == 0;
++        previous = request;
++        if (!matching) { history = frame; return; }
+         const unsigned parity = unsigned(request.vsyncTick & 1u);
+         for (unsigned y = parity; y < frame.height; y += 2u)
+             std::memcpy(history.pixels.data() + y * 640u * 4u,
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -603,7 +603,7 @@
+         // Host latching follows the field transition. Pair the completed
+         // field with its scanline parity, opposite the newly active GS field.
+         GSPresentationRequest completedField = request;
+-        completedField.vsyncTick ^= 1u;
++        if (completedField.vsyncTick) --completedField.vsyncTick;
+         m_fieldWeaver.apply(frame, completedField);
+         m_hostPresentationFrame = std::move(frame.pixels);
+         m_hostPresentationWidth = width;
+@@ -620,6 +620,54 @@
+         recordPresentDebugEventUnlocked(displayFbp, sourceFbp, width, height, usedPreferred);
+     }
+ }
++
++#if defined(PS2APPLE_IOS)
++std::optional<PresentationFrame> GS::tryHostPresentationFrame(std::mutex &displayMutex, uint64_t &capturedTick,
++                                                              bool useContextFallback, bool weave)
++{
++    GSPresentationRequest request;
++    thread_local std::vector<uint8_t> snapshot;
++    {
++        // Skip a busy GS. The host can present the last complete image and poll input on time.
++        std::unique_lock<std::recursive_mutex> stateLock(m_stateMutex, std::try_to_lock);
++        if (!stateLock || !m_backend || !m_privRegs)
++            return std::nullopt;
++        std::unique_lock<std::mutex> displayLock(displayMutex, std::try_to_lock);
++        if (!displayLock)
++            return std::nullopt;
++        request = buildPresentationRequestUnlocked();
++        if (request.pmode & 3u)
++        {
++            std::unique_lock<std::mutex> backendLock(m_backendLifetimeMutex, std::try_to_lock);
++            if (!backendLock)
++                return std::nullopt;
++            // Copy VRAM while the display registers and draw context belong to the same snapshot.
++            m_backend->SnapshotVram(snapshot);
++        }
++        capturedTick = request.vsyncTick;
++    }
++    if (!(request.pmode & 3u))
++    {
++        std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
++        m_fieldWeaver.reset();
++        return PresentationFrame{}; // Both display outputs are explicitly disabled.
++    }
++
++    // The tick already denotes the active field. Scan out the completed one.
++    if (request.vsyncTick) --request.vsyncTick;
++    request.useContextFallback = useContextFallback;
++    request.interpolateFields = !weave;
++    PresentationFrame frame = GSCpuBackend::PresentSnapshot(request, snapshot);
++    if (!frame)
++        return std::nullopt;
++    if (weave)
++    {
++        std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
++        m_fieldWeaver.apply(frame, request);
++    }
++    return frame;
++}
++#endif
+ 
+ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+                                           uint32_t &outWidth,
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -488,19 +488,33 @@
+         return {(smode2 & 0x1ull) != 0ull, ((smode2 >> 1) & 0x1ull) != 0ull};
+     }
+ 
+-    void applyFieldPresentation(std::vector<uint8_t> &pixels, uint32_t width, uint32_t height, bool oddField)
++    void interpolateLine(uint8_t *dest, const uint8_t *a, const uint8_t *b, size_t bytes)
++    {
++        for (size_t x = 0; x < bytes; ++x)
++            dest[x] = static_cast<uint8_t>((unsigned(a[x]) + b[x] + 1u) / 2u);
++    }
++
++    void applyFieldPresentation(std::vector<uint8_t> &pixels, uint32_t width, uint32_t height,
++                                bool oddField, bool interpolate)
+     {
+         if (pixels.empty() || width == 0u || height < 2u)
+             return;
+-        const std::vector<uint8_t> source = pixels;
+-        for (uint32_t y = 0; y < height; ++y)
+-        {
+-            uint32_t sourceY = ((y >> 1u) << 1u) + (oddField ? 1u : 0u);
+-            if (sourceY >= height)
+-                sourceY = height - 1u;
+-            std::memcpy(pixels.data() + y * kHostFrameWidth * 4u,
+-                        source.data() + sourceY * kHostFrameWidth * 4u,
+-                        width * 4u);
++
++        const size_t pitch = kHostFrameWidth * 4u;
++        const size_t bytes = width * 4u;
++        // Fill only missing lines in place. Source lines of this field remain untouched.
++        for (uint32_t y = oddField ? 0u : 1u; y < height; y += 2u)
++        {
++            uint8_t *dest = pixels.data() + y * pitch;
++            if (interpolate && y > 0u && y + 1u < height)
++                interpolateLine(dest, dest - pitch, dest + pitch, bytes);
++            else
++            {
++                uint32_t sourceY = (y & ~1u) + (oddField ? 1u : 0u);
++                if (sourceY >= height)
++                    sourceY = y - 1u;
++                std::memcpy(dest, pixels.data() + sourceY * pitch, bytes);
++            }
+         }
+     }
+ 
+@@ -520,19 +534,18 @@
+         return GSInternal::clampU8(static_cast<int>(dst) + ((delta * static_cast<int>(factor)) / 255));
+     }
+ 
+-    uint32_t countNonBlackPixels(const std::vector<uint8_t> &pixels, uint32_t width, uint32_t height)
+-    {
+-        uint32_t count = 0u;
++    bool hasNonBlackPixels(const std::vector<uint8_t> &pixels, uint32_t width, uint32_t height)
++    {
+         for (uint32_t y = 0; y < height; ++y)
+         {
+             const uint8_t *row = pixels.data() + y * kHostFrameWidth * 4u;
+             for (uint32_t x = 0; x < width; ++x)
+             {
+                 if (row[x * 4u] != 0u || row[x * 4u + 1u] != 0u || row[x * 4u + 2u] != 0u)
+-                    ++count;
++                    return true;
+             }
+         }
+-        return count;
++        return false;
+     }
+ }
+ 
+@@ -1356,6 +1369,26 @@
+     }
+     else
+     {
++        // Opaque, unmasked CT32 clears with unconditional depth tests need no per-pixel
++        // shading. Keep the regular color/depth write order for overlapping GS memory.
++        static const bool capturePixels = std::getenv("PS2_INSPECTOR_PIXELS") != nullptr;
++        if (m_vram && !capturePixels && !state.prim.abe && !state.prim.fge &&
++            ctx.frame.psm == GS_PSM_CT32 && ctx.frame.fbmsk == 0u &&
++            !(ctx.test & ((1ull << 14u) | 1ull)) && ((ctx.test >> 17u) & 3u) == 1u)
++        {
++            const uint32_t fbp = GSInternal::framePageBaseToBlock(ctx.frame.fbp);
++            const uint32_t zbp = GSInternal::framePageBaseToBlock(ctx.zbuf.zbp);
++            const uint32_t fbw = std::max<uint32_t>(ctx.frame.fbw, 1u);
++            const uint32_t rgba = pack32(r, g, b, a | ((ctx.fba & 1u) ? 0x80u : 0u));
++            for (int y = drawY0; y <= drawY1; ++y)
++                for (int x = drawX0; x <= drawX1; ++x)
++                {
++                    GSMem::WriteCT32(m_vram, fbp, fbw, x, y, rgba);
++                    if (!ctx.zbuf.zmask)
++                        WriteVramUnlocked(ctx.zbuf.psm, zbp, fbw, x, y, z1);
++                }
++            return;
++        }
+         for (int y = drawY0; y <= drawY1; ++y)
+             for (int x = drawX0; x <= drawX1; ++x)
+                 WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
+@@ -1938,6 +1971,11 @@
+     // display conversion without holding the producer-side raster lock.
+     thread_local std::vector<uint8_t> snapshot;
+     SnapshotVram(snapshot);
++    return PresentSnapshot(request, snapshot);
++}
++
++PresentationFrame GSCpuBackend::PresentSnapshot(const GSPresentationRequest &request, std::vector<uint8_t> &snapshot)
++{
+     if (snapshot.empty())
+         return {};
+ 
+@@ -1993,7 +2031,8 @@
+         if (pixels.empty() && !CopyFrameToHostRgba(displayFrame, width, readHeight, pixels, preserveAlpha, true, true, origin.x, origin.y))
+             return false;
+ 
+-        if (!usedPreferred && displayFrame.fbp == 0u && countNonBlackPixels(pixels, width, height) == 0u)
++        if (request.useContextFallback && !usedPreferred && displayFrame.fbp == 0u &&
++            !hasNonBlackPixels(pixels, width, readHeight))
+         {
+             for (const GSFrameReg &candidate : request.contextFrames)
+             {
+@@ -2002,7 +2041,7 @@
+                 std::vector<uint8_t> candidatePixels;
+                 if (!CopyFrameToHostRgba(candidate, width, readHeight, candidatePixels, preserveAlpha, true, true, 0u, 0u))
+                     continue;
+-                if (countNonBlackPixels(candidatePixels, width, height) == 0u)
++                if (!hasNonBlackPixels(candidatePixels, width, readHeight))
+                     continue;
+                 selected = candidate;
+                 pixels.swap(candidatePixels);
+@@ -2010,10 +2049,18 @@
+             }
+         }
+         if (doubleRows)
++        {
++            const size_t pitch = kHostFrameWidth * 4u;
+             for (uint32_t y = height; y-- > 1u;)
+-                std::memcpy(pixels.data() + y * kHostFrameWidth * 4u,
+-                            pixels.data() + (y / 2u) * kHostFrameWidth * 4u,
+-                            width * 4u);
++            {
++                uint8_t *dest = pixels.data() + y * pitch;
++                const uint8_t *row = pixels.data() + (y / 2u) * pitch;
++                if (request.interpolateFields && (y & 1u) && y / 2u + 1u < readHeight)
++                    interpolateLine(dest, row, row + pitch, width * 4u);
++                else
++                    std::memcpy(dest, row, width * 4u);
++            }
++        }
+         return true;
+     };
+ 
+@@ -2056,7 +2103,7 @@
+                 }
+             normalizePresentationAlpha(result.pixels, result.width, result.height);
+             if (fieldMode)
+-                applyFieldPresentation(result.pixels, result.width, result.height, oddField);
++                applyFieldPresentation(result.pixels, result.width, result.height, oddField, request.interpolateFields);
+             result.displayFbp = displayFrame1.fbp;
+             result.sourceFbp = selected1.fbp;
+             return result;
+@@ -2071,7 +2118,7 @@
+     if (!copySource(displayFrame, origin, result.width, result.height, true, false, selected, result.pixels, result.usedPreferred))
+         return {};
+     if (fieldMode)
+-        applyFieldPresentation(result.pixels, result.width, result.height, oddField);
++        applyFieldPresentation(result.pixels, result.width, result.height, oddField, request.interpolateFields);
+     normalizePresentationAlpha(result.pixels, result.width, result.height);
+     result.displayFbp = displayFrame.fbp;
+     result.sourceFbp = selected.fbp;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -427,9 +427,42 @@
+ }
+ 
+ #if defined(PS2APPLE_IOS)
+-void UpdatePS2Frame(Texture2D texture, const void *pixels, int width, int height);
+-#endif
+-
++#include "native_scanout.h"
++
++static void UploadFrame(Texture2D &texture, PS2Runtime *rt, uint32_t &width, uint32_t &height)
++{
++    static uint64_t lastTick = std::numeric_limits<uint64_t>::max();
++    static uint32_t lastWidth = FB_WIDTH, lastHeight = DEFAULT_DISPLAY_HEIGHT;
++    width = lastWidth;
++    height = lastHeight;
++    auto &memory = rt->memory();
++    const uint64_t tick = memory.gs().vsyncTick.load(std::memory_order_acquire);
++    if (tick == lastTick)
++        return;
++
++    const auto options = PS2HostScanoutOptions();
++    constexpr uint64_t notCaptured = std::numeric_limits<uint64_t>::max();
++    uint64_t capturedTick = notCaptured;
++    auto frame = rt->gs().tryHostPresentationFrame(memory.gsAccessMutex(), capturedTick,
++                                                   options.useContextFallback, options.weave);
++    if (!frame)
++    {
++        if (capturedTick == notCaptured)
++            PS2RetryScanout();
++        return; // Retain the last image until a complete scanout becomes available.
++    }
++
++    lastTick = capturedTick;
++    if (!*frame)
++    {
++        PS2BlankFrame();
++        return;
++    }
++    lastWidth = width = std::min<uint32_t>(frame->width, FB_WIDTH);
++    lastHeight = height = std::min<uint32_t>(frame->height, FB_HEIGHT);
++    PS2UploadFrame(texture, frame->pixels.data(), width, height, FB_WIDTH);
++}
++#else
+ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+ {
+     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+@@ -441,9 +474,7 @@
+     static uint32_t s_lastHeight = 0u;
+     static bool s_hasUploadedFrame = false;
+     static std::vector<uint8_t> s_scratch;
+-#if !defined(PS2APPLE_IOS)
+     static std::vector<uint8_t> s_uploadBuffer(DEFAULT_FB_SIZE, 0u);
+-#endif
+ 
+     const uint64_t currentTick = rt->eeScheduler().currentVSyncTick();
+     const bool needsLatch = !s_hasLatchedInitialFrame || currentTick != s_lastPresentationTick;
+@@ -509,12 +540,6 @@
+     s_lastWidth = width;
+     s_lastHeight = height;
+ 
+-#if defined(PS2APPLE_IOS)
+-    if (width && height && s_scratch.size() >= static_cast<size_t>(width) * height * 4u)
+-        UpdatePS2Frame(tex, s_scratch.data(), width, height);
+-    outWidth = std::min<uint32_t>(width, FB_WIDTH);
+-    outHeight = std::min<uint32_t>(height, FB_HEIGHT);
+-#else
+     std::fill(s_uploadBuffer.begin(), s_uploadBuffer.end(), 0u);
+     if (!s_scratch.empty() && width != 0u && height != 0u)
+     {
+@@ -539,9 +564,9 @@
+     UpdateTexture(tex, s_uploadBuffer.data());
+     outWidth = width;
+     outHeight = height;
++    s_hasUploadedFrame = true;
++}
+ #endif
+-    s_hasUploadedFrame = true;
+-}
+ 
+ PS2Runtime::PS2Runtime()
+ {
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -355,6 +355,9 @@
+     void clearModifiedFlag(uint32_t address, uint32_t size);
+ 
+     // GS register accessors
++#if defined(PS2APPLE_IOS)
++    std::mutex &gsAccessMutex() { return m_gsAccessMutex; }
++#endif
+     GSRegisters &gs() { return gs_regs; }
+     const GSRegisters &gs() const { return gs_regs; }
+     uint8_t *getGSVRAM() { return m_gsVRAM; }
+@@ -380,6 +383,9 @@
+     std::unordered_map<uint32_t, uint32_t> m_ioRegisters;
+ 
+     // Registers
++#if defined(PS2APPLE_IOS)
++    mutable std::mutex m_gsAccessMutex;
++#endif
+     GSRegisters gs_regs;
+     uint8_t *m_gsVRAM;
+     VIFRegisters vif0_regs;
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -747,6 +747,9 @@
+             uint64_t val = gs_regs.csr.load();
+             return (uint32_t)(val >> (off * 8));
+         }
++#if defined(PS2APPLE_IOS)
++        std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+         uint64_t *reg = gsRegPtr(gs_regs, address);
+         if (!reg)
+             return 0;
+@@ -793,6 +796,9 @@
+         {
+             return gs_regs.csr.load();
+         }
++#if defined(PS2APPLE_IOS)
++        std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+         uint64_t *reg = gsRegPtr(gs_regs, address);
+         return reg ? *reg : 0;
+     }
+@@ -959,6 +965,9 @@
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
++#if defined(PS2APPLE_IOS)
++            std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+             uint64_t mask = 0xFFFFFFFFULL << (off * 8);
+             uint64_t newVal = (*reg & ~mask) | ((uint64_t)value << (off * 8));
+             *reg = newVal;
+@@ -1018,6 +1027,9 @@
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
++#if defined(PS2APPLE_IOS)
++            std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+             *reg = value;
+         }
+         return;
+@@ -1153,6 +1165,9 @@
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
++#if defined(PS2APPLE_IOS)
++            std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+             const uint64_t mask = 0xFFFFFFFFull << (off * 8u);
+             *reg = (*reg & ~mask) | (static_cast<uint64_t>(value) << (off * 8u));
+         }
+@@ -2249,6 +2264,9 @@
+         }
+         if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
++#if defined(PS2APPLE_IOS)
++            std::lock_guard<std::mutex> displayLock(m_gsAccessMutex);
++#endif
+             return static_cast<uint32_t>((*reg >> (off * 8u)) & 0xFFFFFFFFull);
+         }
+         return 0u;
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -16,6 +16,9 @@
+                 (static_cast<uint64_t>(interlaced) & 0x1ull) |
+                 ((static_cast<uint64_t>(frameMode) & 0x1ull) << 1);
+ 
++#if defined(PS2APPLE_IOS)
++            std::lock_guard<std::mutex> displayLock(runtime->memory().gsAccessMutex());
++#endif
+             gs.smode2 = smode2;
+ 
+             // Keep CRT1 enabled after the BIOS syscall selects a display mode.

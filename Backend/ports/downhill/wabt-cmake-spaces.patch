@@ -1,0 +1,31 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b5a5da3..6c31578 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -262,12 +262,12 @@ set(TEMPLATE_CMAKE ${WABT_SOURCE_DIR}/scripts/gen-wasm2c-templates.cmake)
+ add_custom_command(
+   OUTPUT gen-wasm2c-prebuilt
+ 
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_header_top.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c.top.h" -D symbol="s_header_top" -P ${TEMPLATE_CMAKE}
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_header_bottom.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c.bottom.h" -D symbol="s_header_bottom" -P ${TEMPLATE_CMAKE}
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_source_includes.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c.includes.c" -D symbol="s_source_includes" -P ${TEMPLATE_CMAKE}
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_source_declarations.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c.declarations.c" -D symbol="s_source_declarations" -P ${TEMPLATE_CMAKE}
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_simd_source_declarations.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c_simd.declarations.c" -D symbol="s_simd_source_declarations" -P ${TEMPLATE_CMAKE}
+-  COMMAND ${CMAKE_COMMAND} -D out="${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_atomicops_source_declarations.cc" -D in="${WABT_SOURCE_DIR}/src/template/wasm2c_atomicops.declarations.c" -D symbol="s_atomicops_source_declarations" -P ${TEMPLATE_CMAKE}
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_header_top.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c.top.h" "-Dsymbol=s_header_top" -P "${TEMPLATE_CMAKE}"
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_header_bottom.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c.bottom.h" "-Dsymbol=s_header_bottom" -P "${TEMPLATE_CMAKE}"
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_source_includes.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c.includes.c" "-Dsymbol=s_source_includes" -P "${TEMPLATE_CMAKE}"
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_source_declarations.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c.declarations.c" "-Dsymbol=s_source_declarations" -P "${TEMPLATE_CMAKE}"
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_simd_source_declarations.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c_simd.declarations.c" "-Dsymbol=s_simd_source_declarations" -P "${TEMPLATE_CMAKE}"
++  COMMAND ${CMAKE_COMMAND} "-Dout=${WABT_SOURCE_DIR}/src/prebuilt/wasm2c_atomicops_source_declarations.cc" "-Din=${WABT_SOURCE_DIR}/src/template/wasm2c_atomicops.declarations.c" "-Dsymbol=s_atomicops_source_declarations" -P "${TEMPLATE_CMAKE}"
+   COMMAND ${CMAKE_COMMAND} -E touch gen-wasm2c-prebuilt
+ 
+   DEPENDS ${WABT_SOURCE_DIR}/src/template/wasm2c.top.h
+@@ -276,6 +276,7 @@ add_custom_command(
+   ${WABT_SOURCE_DIR}/src/template/wasm2c.declarations.c
+   ${WABT_SOURCE_DIR}/src/template/wasm2c_simd.declarations.c
+   ${WABT_SOURCE_DIR}/src/template/wasm2c_atomicops.declarations.c
++  VERBATIM
+ )
+ 
+ add_custom_target(gen-wasm2c-prebuilt-target DEPENDS gen-wasm2c-prebuilt)

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "shaolin-monks-aot",
+  "title": "Mortal Kombat: Shaolin Monks",
+  "region": "USA",
+  "serial": "SLUS-21087",
+  "bootSHA256": "b1ed99d81b07969553ed2f9afaad4caed1bbeb637d53a369f4dafca8eedd2ab2",
+  "bundle": "ShaolinMonks.app",
+  "bundleID": "net.isolution.ps2apple.slus-21087",
+  "upstream": "exoteric33/ps2-native-recomp",
+  "version": "1.6.4",
+  "stage": "Goro's Lair tested on Mac · iPhoneOS test build",
+  "channel": "ios-preview",
+  "revision": "e9a48aae8e0537f3a91d8584b2d78c6056723435"
+}

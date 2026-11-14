@@ -1,0 +1,74 @@
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+--- a/port/ios/launcher.m
++++ b/port/ios/launcher.m
+@@ -6,6 +6,8 @@
+ #include "launcher.h"
+ #include "../render/include/dhd_settings.h"
+ 
++__attribute__((used)) const char ps2apple_downhill_frontend[] = "PS2AppleDownhillUI-v1";
++
+ const char *host_disc_check(const char *path);
+ static SDL_JoystickID chosen_gamepad;
+ static bool gamepads_started;
+@@ -70,6 +72,7 @@
+         value = [NSString stringWithUTF8String:text];
+     value = value.length ? value : fallback;
+     if (![key isEqualToString:@"ios_gamepad"]) value = value.lowercaseString;
++    if ([key isEqualToString:@"fps"] && ![value isEqualToString:@"30"]) value = @"60";
+     self.values[key] = value;
+     return value;
+ }
+@@ -408,8 +411,8 @@
+               labels:@[@"Game default", @"5%", @"10%", @"15%", @"20%"] fallback:@"game"];
+         [self toggle:@"Gamepad vibration" key:@"vibration" fallback:@"1"];
+     } else {
+-        [self choice:@"FPS limit" key:@"fps" values:@[@"30", @"60", @"120", @"monitor"]
+-              labels:@[@"30 FPS", @"60 FPS", @"120 FPS", @"Auto · display"] fallback:@"60"];
++        [self choice:@"FPS limit" key:@"fps" values:@[@"30", @"60"]
++              labels:@[@"30 FPS", @"60 FPS"] fallback:@"60"];
+         [self toggle:@"VSync" key:@"vsync" fallback:@"1"];
+         [self toggle:@"Show FPS counter" key:@"perf_counter" fallback:@"0"];
+         UILabel *note = DHDLabel(@"The FPS limit is a target. Actual frame rate depends on the device, resolution and effects.", 11, UIFontWeightRegular);
+@@ -422,7 +425,7 @@
+ - (void)refreshSummary
+ {
+     NSString *fps = [self value:@"fps" fallback:@"60"];
+-    NSString *rate = [fps isEqualToString:@"monitor"] ? @"Auto FPS" : [fps stringByAppendingString:@" FPS"];
++    NSString *rate = [fps stringByAppendingString:@" FPS"];
+     BOOL touch = DHDEnabled([self value:@"touch_enabled" fallback:@"1"]);
+     self.summary.text = [NSString stringWithFormat:@"%@  ·  %@", touch ? @"Touch controls on" : @"Gamepad controls", rate];
+ }
+@@ -509,6 +512,7 @@
+         [self alert:@"Choose your controls" message:@"Enable the virtual controller or connect a gamepad before playing."];
+         return;
+     }
++    self.values[@"fps"] = [self value:@"fps" fallback:@"60"];
+     self.values[@"iso"] = self.disc;
+     self.values[@"touch_preset"] = @"classic";
+     for (NSString *key in self.values) {
+@@ -517,6 +521,7 @@
+             return;
+         }
+     }
++    setenv("DHD_FPS", self.values[@"fps"].UTF8String, 1);
+     setenv("DHD_TOUCH_ENABLED", DHDEnabled(self.values[@"touch_enabled"]) ? "1" : "0", 1);
+     [self.controllerTimer invalidate];
+     self.wantsPlay = YES;
+diff --git a/port/hle/touch.c b/port/hle/touch.c
+--- a/port/hle/touch.c
++++ b/port/hle/touch.c
+@@ -354,10 +354,10 @@
+     memset(t->ctl, 0, sizeof t->ctl);
+     struct { int control; float x, y, radius, hw, hh; } places[] = {
+         {TC_DPAD, left + 18*s, bottom - 19*s, 13*s, 0, 0},
+-        {TC_STICK, left + 46*s, bottom - 15*s, 11*s, 0, 0},
+-        {TC_RSTICK, right - 47*s, bottom - 15*s, 11*s, 0, 0},
+-        {TC_L3, left + 46*s, bottom - 33*s, 4*s, 0, 0},
+-        {TC_R3, right - 47*s, bottom - 33*s, 4*s, 0, 0},
++        {TC_STICK, left + 46*s, bottom - 17*s, 14*s, 0, 0},
++        {TC_RSTICK, right - 49*s, bottom - 17*s, 14*s, 0, 0},
++        {TC_L3, left + 46*s, bottom - 36*s, 4*s, 0, 0},
++        {TC_R3, right - 49*s, bottom - 36*s, 4*s, 0, 0},
+         {TC_TRIANGLE, right - 20*s, bottom - 32*s, 4.8f*s, 0, 0},
+         {TC_CSQUARE, right - 30*s, bottom - 22*s, 4.8f*s, 0, 0},
+         {TC_CCIRCLE, right - 10*s, bottom - 22*s, 4.8f*s, 0, 0},

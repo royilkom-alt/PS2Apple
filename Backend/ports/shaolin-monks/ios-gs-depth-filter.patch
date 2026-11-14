@@ -1,0 +1,89 @@
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1170,11 +1170,10 @@
+         texVf = t * invQ * static_cast<float>(texH);
+     }
+ 
+-    auto samplePoint = [&](int sampleU, int sampleV) -> uint32_t
+-    {
+-        sampleU = wrapTextureCoordinate(sampleU, texW, wrapU, minU, maxU);
+-        sampleV = wrapTextureCoordinate(sampleV, texH, wrapV, minV, maxV);
+-
++    const auto wrapX = [&](int x) { return wrapTextureCoordinate(x, texW, wrapU, minU, maxU); };
++    const auto wrapY = [&](int y) { return wrapTextureCoordinate(y, texH, wrapV, minV, maxV); };
++    const auto samplePoint = [&](int sampleU, int sampleV) -> uint32_t
++    {
+         u32 out = ReadVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
+ 
+         switch (tex.psm)
+@@ -1202,7 +1201,7 @@
+ 
+     if (!state.linearFilter)
+     {
+-        return samplePoint(static_cast<int>(texUf), static_cast<int>(texVf));
++        return samplePoint(wrapX(static_cast<int>(texUf)), wrapY(static_cast<int>(texVf)));
+     }
+ 
+     const float sampleU = texUf - 0.5f;
+@@ -1214,10 +1213,17 @@
+     const float fx = sampleU - static_cast<float>(u0);
+     const float fy = sampleV - static_cast<float>(v0);
+ 
+-    const uint32_t c00 = samplePoint(u0, v0);
+-    const uint32_t c10 = samplePoint(u1, v0);
+-    const uint32_t c01 = samplePoint(u0, v1);
+-    const uint32_t c11 = samplePoint(u1, v1);
++    // Wrap each coordinate once and reuse texels on clamped edges and zero-weight taps.
++    const int left = wrapX(u0);
++    const int top = wrapY(v0);
++    const int right = fx == 0.0f ? left : wrapX(u1);
++    const int bottom = fy == 0.0f ? top : wrapY(v1);
++    const uint32_t c00 = samplePoint(left, top);
++    if (left == right && top == bottom)
++        return c00;
++    const uint32_t c10 = left == right ? c00 : samplePoint(right, top);
++    const uint32_t c01 = top == bottom ? c00 : samplePoint(left, bottom);
++    const uint32_t c11 = top == bottom ? c10 : left == right ? c01 : samplePoint(right, bottom);
+ 
+     const uint8_t r = lerpChannel(static_cast<uint8_t>(c00 & 0xFFu),
+                                   static_cast<uint8_t>(c10 & 0xFFu),
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1028,7 +1028,7 @@
+         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
+         vtx.x = static_cast<float>(x) / 16.0f;
+         vtx.y = static_cast<float>(y) / 16.0f;
+-        vtx.z = static_cast<float>(z);
++        vtx.z = static_cast<double>(z);
+         vtx.r = m_curR;
+         vtx.g = m_curG;
+         vtx.b = m_curB;
+@@ -1065,7 +1065,7 @@
+         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
+         vtx.x = static_cast<float>(x) / 16.0f;
+         vtx.y = static_cast<float>(y) / 16.0f;
+-        vtx.z = static_cast<float>(z);
++        vtx.z = static_cast<double>(z);
+         vtx.r = m_curR;
+         vtx.g = m_curG;
+         vtx.b = m_curB;
+@@ -1099,7 +1099,7 @@
+         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
+         vtx.x = static_cast<float>(lo & 0xFFFF) / 16.0f;
+         vtx.y = static_cast<float>((lo >> 32) & 0xFFFF) / 16.0f;
+-        vtx.z = static_cast<float>((hi >> 4) & 0xFFFFFF);
++        vtx.z = static_cast<double>((hi >> 4) & 0xFFFFFF);
+         vtx.r = m_curR;
+         vtx.g = m_curG;
+         vtx.b = m_curB;
+@@ -1130,7 +1130,7 @@
+         GSVertex &vtx = m_vtxQueue[m_vtxCount % kMaxVerts];
+         vtx.x = static_cast<float>(lo & 0xFFFF) / 16.0f;
+         vtx.y = static_cast<float>((lo >> 32) & 0xFFFF) / 16.0f;
+-        vtx.z = static_cast<float>(hi & 0xFFFFFFFF);
++        vtx.z = static_cast<double>(hi & 0xFFFFFFFF);
+         vtx.r = m_curR;
+         vtx.g = m_curG;
+         vtx.b = m_curB;

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "god-of-war-ii",
+  "title": "God of War II",
+  "region": "USA",
+  "serial": "SCUS-97481",
+  "bootSHA1": "e6a62a0f3e781c29513f563f4625b9b3a9103c56",
+  "bundle": "GodOfWarII.app",
+  "bundleID": "net.isolution.ps2apple.scus-97481",
+  "upstream": "exoteric33/ps2-native-recomp",
+  "version": "0.1.0",
+  "stage": "Desktop playthrough · iPhoneOS test build",
+  "channel": "ios-preview",
+  "revision": "e9a48aae8e0537f3a91d8584b2d78c6056723435"
+}

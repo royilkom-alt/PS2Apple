@@ -1,0 +1,297 @@
+diff --git a/port/ios/main.m b/port/ios/main.m
+--- a/port/ios/main.m
++++ b/port/ios/main.m
+@@ -1,4 +1,4 @@
+-/* iPhoneOS entry for the shared SDL host. The disc is copied by the player through Files.
++/* iPhoneOS entry for the shared SDL host.
+    This file is part of the Downhill Revived port and is licensed GPL-3.0-or-later. */
+ #import <Foundation/Foundation.h>
+ #include <SDL3/SDL.h>
+@@ -31,16 +31,16 @@
+         NSString *exe = [support.path stringByAppendingPathComponent:@"DownhillRevived"];
+         if (![exe getFileSystemRepresentation:writable_executable_path maxLength:sizeof writable_executable_path])
+             return 1;
+-        NSString *disc = [documents.path stringByAppendingPathComponent:@"SCUS-97177.iso"];
+         NSString *settings = [support.path stringByAppendingPathComponent:@"dhd.ini"];
+         SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+         SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
+-        if (![files fileExistsAtPath:disc]) {
+-            NSString *guide = [documents.path stringByAppendingPathComponent:@"Put SCUS-97177.iso Here.txt"];
+-            [@"Copy your original Downhill Domination USA ISO here as SCUS-97177.iso."
+-                 writeToFile:guide atomically:YES encoding:NSUTF8StringEncoding error:NULL];
++        PS2DiscAccess *disc = dhd_ios_prelaunch(documents, settings.fileSystemRepresentation);
++        if (!disc) return 1;
++        if (setenv("DHD_ISO", disc.URL.fileSystemRepresentation, 1) != 0) {
++            dhd_ios_launcher_finish();
++            [disc close];
++            return 1;
+         }
+-        if (!dhd_ios_prelaunch(disc.fileSystemRepresentation, settings.fileSystemRepresentation)) return 1;
+         setenv("TMPDIR", NSTemporaryDirectory().fileSystemRepresentation, 1);
+         setenv("DHD_LAUNCHER", "1", 1);
+         setenv("DHD_SETTINGS", settings.fileSystemRepresentation, 1);
+@@ -48,6 +48,8 @@
+         setenv("DHD_MEMCARD_DIR", support.fileSystemRepresentation, 1);
+         int result = dhd_launcher_main(argc, argv);
+         dhd_ios_launcher_finish();
++        unsetenv("DHD_ISO");
++        [disc close];
+         return result;
+     }
+ }
+diff --git a/port/ios/launcher.h b/port/ios/launcher.h
+--- a/port/ios/launcher.h
++++ b/port/ios/launcher.h
+@@ -3,7 +3,10 @@
+ #define DHD_IOS_LAUNCHER_H
+ #include <stdbool.h>
+ #include <SDL3/SDL_joystick.h>
+-bool dhd_ios_prelaunch(const char *disc, const char *settings);
++#ifdef __OBJC__
++#import "shared/PS2DiscPicker.h"
++PS2DiscAccess *dhd_ios_prelaunch(NSURL *directory, const char *settings);
++#endif
+ SDL_JoystickID dhd_ios_selected_gamepad(void);
+ void dhd_ios_launcher_finish(void);
+ #endif
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+--- a/port/ios/launcher.m
++++ b/port/ios/launcher.m
+@@ -51,7 +51,10 @@
+ }
+ 
+ @interface DHDLauncher : UIViewController
+-@property(nonatomic, copy) NSString *disc;
++@property(nonatomic, strong) NSURL *directory;
++@property(nonatomic, strong) PS2DiscAccess *disc;
++@property(nonatomic, strong) PS2DiscPicker *discPicker;
++@property(nonatomic) BOOL selectingDisc;
+ @property(nonatomic, copy) NSString *settingsPath;
+ @property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *values;
+ @property(nonatomic, strong) NSArray<NSDictionary *> *pads;
+@@ -153,7 +156,10 @@
+     [card addSubview:cardTitle];
+ 
+     UILabel *title = DHDLabel(@"Downhill Domination", 19, UIFontWeightSemibold);
+-    self.discStatus = DHDLabel(@"", 11, UIFontWeightRegular);
++    self.discPicker = [[PS2DiscPicker alloc] init];
++    self.discStatus = DHDLabel(self.discPicker.hasSavedDisc ? @"ISO selected" : @"Choose an ISO to play",
++                              11, UIFontWeightRegular);
++    self.discStatus.textColor = DHDColor(0x8BD9CE, 1);
+     self.summary = DHDLabel(@"", 10, UIFontWeightRegular);
+     self.summary.textColor = DHDColor(0x9CA5AE, 1);
+     UIStackView *details = [[UIStackView alloc] initWithArrangedSubviews:@[title, self.discStatus, self.summary]];
+@@ -204,7 +210,6 @@
+     [self value:@"touch_enabled" fallback:@"1"];
+     [self refreshControllers];
+     [self changeTab:self.tabs];
+-    [self checkDisc];
+     __weak DHDLauncher *weakSelf = self;
+     self.controllerTimer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
+         (void)timer;
+@@ -283,6 +288,7 @@
+ 
+ - (void)showSettings
+ {
++    if (self.selectingDisc) return;
+     self.catalogView.hidden = YES;
+     self.settingsView.hidden = NO;
+     [self refreshControllers];
+@@ -294,7 +300,6 @@
+     self.settingsView.hidden = YES;
+     self.catalogView.hidden = NO;
+     [self refreshSummary];
+-    [self checkDisc];
+     UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification, self.playButton);
+ }
+ 
+@@ -509,11 +514,11 @@
+     [self presentViewController:alert animated:YES completion:nil];
+ }
+ 
+-- (void)checkDisc
+-{
+-    const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
+-    self.discStatus.text = problem ? @"ISO needed  •  SCUS-97177.iso" : @"Ready to play";
+-    self.discStatus.textColor = DHDColor(problem ? 0xD7AE76 : 0x8BD9CE, 1);
++- (void)resetPlay
++{
++    self.selectingDisc = NO;
++    self.playButton.enabled = YES;
++    self.discStatus.text = self.discPicker.hasSavedDisc ? @"ISO selected" : @"Choose an ISO to play";
+ }
+ 
+ - (void)editTouchLayout
+@@ -523,12 +528,7 @@
+ 
+ - (void)play
+ {
+-    const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
+-    if (problem) {
+-        [self alert:@"Original disc required"
+-            message:[NSString stringWithFormat:@"%s\n\nPut SCUS-97177.iso in Files → On My iPhone → Downhill Revived, then tap Play again.", problem]];
+-        return;
+-    }
++    if (self.selectingDisc) return;
+     [self refreshControllers];
+     NSString *selection = [self value:@"ios_gamepad" fallback:@"auto"];
+     chosen_gamepad = 0;
+@@ -542,8 +542,56 @@
+         [self alert:@"Choose your controls" message:@"Enable the virtual controller or connect a gamepad before playing."];
+         return;
+     }
++    self.selectingDisc = YES;
++    self.playButton.enabled = NO;
++    self.discStatus.text = @"Opening disc…";
++    __weak DHDLauncher *weakSelf = self;
++    [self.discPicker openSavedDisc:^(PS2DiscAccess *disc, NSString *error) {
++        (void)error;
++        DHDLauncher *launcher = weakSelf;
++        if (disc) [launcher prepareDisc:disc retrySelection:YES];
++        else [launcher selectDisc];
++    }];
++}
++
++- (void)selectDisc
++{
++    self.discStatus.text = @"Select the game ISO in Files…";
++    __weak DHDLauncher *weakSelf = self;
++    [self.discPicker presentFrom:self directory:self.directory completion:^(PS2DiscAccess *disc, NSString *error) {
++        DHDLauncher *launcher = weakSelf;
++        if (!launcher) return;
++        if (!disc) {
++            [launcher resetPlay];
++            if (error.length) [launcher alert:@"Could not open ISO" message:error];
++            return;
++        }
++        [launcher prepareDisc:disc retrySelection:NO];
++    }];
++}
++
++- (void)prepareDisc:(PS2DiscAccess *)disc retrySelection:(BOOL)retrySelection
++{
++    self.discStatus.text = @"Reading disc…";
++    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
++        const char *problem = host_disc_check(disc.URL.fileSystemRepresentation);
++        NSString *failure = problem ? ([NSString stringWithUTF8String:problem] ?: @"Could not read the selected disc.") : nil;
++        dispatch_async(dispatch_get_main_queue(), ^{
++            if (failure) {
++                [disc close];
++                if (retrySelection) [self selectDisc];
++                else {
++                    [self resetPlay];
++                    [self alert:@"Could not start game" message:failure];
++                }
++            } else [self startDisc:disc];
++        });
++    });
++}
++
++- (void)startDisc:(PS2DiscAccess *)disc
++{
+     self.values[@"fps"] = [self value:@"fps" fallback:@"60"];
+-    self.values[@"iso"] = self.disc;
+     NSMutableDictionary *layout = [NSMutableDictionary dictionary];
+     for (NSString *key in self.values) {
+         if (DHDTouchLayoutKey(key)) {
+@@ -551,6 +599,8 @@
+             continue;
+         }
+         if (!dhd_settings_save(self.settingsPath.fileSystemRepresentation, key.UTF8String, self.values[key].UTF8String)) {
++            [disc close];
++            [self resetPlay];
+             [self alert:@"Settings could not be saved" message:@"Check available storage, then tap Play again."];
+             return;
+         }
+@@ -565,11 +615,13 @@
+     setenv("DHD_TOUCH_ENABLED", touchEnabled ? "1" : "0", 1);
+     if (touchEnabled) setenv("DHD_TOUCH", "ios", 1);
+     [self.controllerTimer invalidate];
++    [disc remember];
++    self.disc = disc;
+     self.wantsPlay = YES;
+ }
+ @end
+ 
+-bool dhd_ios_prelaunch(const char *disc, const char *settings)
++PS2DiscAccess *dhd_ios_prelaunch(NSURL *directory, const char *settings)
+ {
+     @autoreleasepool {
+         UIWindowScene *scene = nil;
+@@ -583,13 +635,13 @@
+         }
+         if (!scene) {
+             fprintf(stderr, "ios: no active scene for the prelaunch screen\n");
+-            return false;
++            return nil;
+         }
+         UIWindow *previous = nil;
+         for (UIWindow *candidate in scene.windows) if (candidate.isKeyWindow) previous = candidate;
+         gamepads_started = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+         DHDLauncher *controller = [[DHDLauncher alloc] init];
+-        controller.disc = [NSString stringWithUTF8String:disc];
++        controller.directory = directory;
+         controller.settingsPath = [NSString stringWithUTF8String:settings];
+         UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+         window.windowLevel = UIWindowLevelNormal + 1;
+@@ -603,6 +655,6 @@
+         window.hidden = YES;
+         window.rootViewController = nil;
+         [previous makeKeyWindow];
+-        return true;
+-    }
+-}
++        return controller.disc;
++    }
++}
+diff --git a/port/tools/build_host64.py b/port/tools/build_host64.py
+--- a/port/tools/build_host64.py
++++ b/port/tools/build_host64.py
+@@ -119,7 +119,7 @@
+     if t.ios:
+         units.remove('port/host/touch_host.c')
+         units += ['port/ios/main.m', 'port/ios/launcher.m', 'port/ios/touch_bridge.c',
+-                  'port/ios/shared/PS2Touch.m']
++                  'port/ios/shared/PS2Touch.m', 'port/ios/shared/PS2DiscPicker.m']
+     if t.android:
+         units += ANDROID_UNITS
+     return units
+@@ -562,7 +562,7 @@
+             run([cc, *t.flags, '-Wl,-dead_strip', '-Wl,-ObjC', '-Wl,-S', *objects,
+                  library, report['lib'], sdl_lib, *sdl_libs, *rust_libs,
+                  '-framework', 'Foundation', '-framework', 'UIKit', '-framework', 'QuartzCore',
+-                 '-framework', 'CoreGraphics',
++                 '-framework', 'CoreGraphics', '-framework', 'UniformTypeIdentifiers',
+                  '-o', exe], timeout=900)
+         elif t.mac:
+             # ld64: -dead_strip as --gc-sections; no -rdynamic (exporting every symbol keeps the
+diff --git a/port/hle/host.c b/port/hle/host.c
+--- a/port/hle/host.c
++++ b/port/hle/host.c
+@@ -1302,13 +1302,16 @@
+ /* At start: the disc image dhd.ini names (iso), if it is there and is Downhill Domination (USA).
+    The launcher (port/launcher, disc.rs) chooses it and checks it the same way on every desktop;
+    Android's start picks it (port/host/android_main.c). DHD_ISO in the environment overrides the
+-   file and is never questioned (the tools set it). Without a usable one: a message (in the log;
++   file. Desktop tools supply it directly. iOS still checks the selected disc's retail data.
++   Without a usable disc: a message (in the log;
+    DHD_HEADLESS shows no box), then the end. Returns 0 to go on, 1 to end. */
+ int host_disc_ready(void)
+ {
+     static const char title[] = "Downhill Revived";
+     static char why[512], message[1536];
++#ifndef DHD_IOS
+     if (iso_from_environment) return 0;
++#endif
+     const char *iso = getenv("DHD_ISO");
+     const char *problem = iso ? disc_problem(iso, why, sizeof why) : NULL;
+     if (iso && !problem) return 0;
+@@ -1318,7 +1321,7 @@
+     static const char choose[] = "Start the game again to choose your Downhill Domination (USA) disc image (SCUS-97177).";
+     if (iso) remove(iso);
+ #elif defined(DHD_IOS)
+-    static const char choose[] = "In Files, put the original disc in Downhill Revived as SCUS-97177.iso, then reopen the app.";
++    static const char choose[] = "Reopen the app and choose your original Downhill Domination USA ISO in Files.";
+ #else
+     static const char choose[] = "Start the game from its launcher (DownhillRevived) and choose your Downhill "
+                                  "Domination (USA) disc image (SCUS-97177) there.";

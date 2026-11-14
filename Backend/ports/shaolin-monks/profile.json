@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "shaolin-monks",
+  "title": "Mortal Kombat: Shaolin Monks",
+  "region": "USA",
+  "serial": "SLUS-21087",
+  "bootSHA256": "b1ed99d81b07969553ed2f9afaad4caed1bbeb637d53a369f4dafca8eedd2ab2",
+  "output": "ipa",
+  "stage": "Research · retail graphics and performance issues",
+  "upstream": "OGmidway/mksm-recomp",
+  "version": "0.1.0",
+  "revision": "9c014184b54f8f4235db9327bf6a5d77566475c5",
+  "bundle": "ShaolinMonks.app",
+  "bundleID": "net.isolution.shaolinmonks",
+  "channel": "research"
+}

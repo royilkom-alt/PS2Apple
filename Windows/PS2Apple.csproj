@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <AssemblyTitle>PS2Apple</AssemblyTitle>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>$(PS2AppleIcon)</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../Backend/game-catalog.json" LogicalName="game-catalog.json" />
+    <EmbeddedResource Include="$(PS2AppleComponents)" LogicalName="components.zip" />
+    <EmbeddedResource Include="../Resources/AppIcon.png" LogicalName="AppIcon.png" />
+    <EmbeddedResource Include="../Resources/YouTube.png" LogicalName="YouTube.png" />
+    <EmbeddedResource Include="../Resources/Discord.png" LogicalName="Discord.png" />
+  </ItemGroup>
+</Project>

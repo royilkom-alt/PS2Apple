@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "id": "budokai-tenkaichi-3",
+  "title": "Dragon Ball Z: Budokai Tenkaichi 3",
+  "region": "USA",
+  "serial": "SLUS-21678",
+  "bootSHA256": "811188ba9b416500d921cd4d9514df0cbf42f3a41a99cf5aac5a3da37171bf99",
+  "bundle": "SLUS-21678.app",
+  "bundleID": "net.isolution.ps2apple.slus-21678",
+  "upstream": "z3xox/BT3-Recomp",
+  "version": "0.1.0",
+  "stage": "Dedicated iPhoneOS port",
+  "channel": "tested-pack",
+  "revision": "e22a34beb564e2d0f32bd60b02f0a95d9645ddcc"
+}

@@ -1,0 +1,84 @@
+diff --git a/ps2xRuntime/include/runtime/gs/gs_backend.h b/ps2xRuntime/include/runtime/gs/gs_backend.h
+--- a/ps2xRuntime/include/runtime/gs/gs_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_backend.h
+@@ -14,6 +14,10 @@
+     virtual void Reset() = 0;
+ 
+     virtual void Submit(const GSPrimitiveBatch &batch) = 0;
++#if defined(PS2APPLE_IOS)
++    virtual void PaletteRegister(uint8_t, uint64_t) {}
++    virtual bool PresentToWindow(const GSPresentationRequest &, bool) { return false; }
++#endif
+ 
+     virtual void BeginTransfer(const GSTransferCommand &command) = 0;
+     virtual void UploadImage(const uint8_t *data, uint32_t sizeBytes) = 0;
+diff --git a/ps2xRuntime/include/runtime/gs/gs_frontend.h b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+--- a/ps2xRuntime/include/runtime/gs/gs_frontend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_frontend.h
+@@ -133,6 +133,7 @@
+     bool getPreferredDisplaySource(GSFrameReg &outSource, uint32_t &outDestFbp) const;
+     void latchHostPresentationFrame();
+ #if defined(PS2APPLE_IOS)
++    bool tryHostMetalPresent(std::mutex &displayMutex, uint64_t &capturedTick, bool show);
+     std::optional<PresentationFrame> tryHostPresentationFrame(std::mutex &displayMutex, uint64_t &capturedTick,
+                                                              bool useContextFallback, bool weave);
+ #endif
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -622,6 +622,20 @@
+ }
+ 
+ #if defined(PS2APPLE_IOS)
++bool GS::tryHostMetalPresent(std::mutex &displayMutex, uint64_t &capturedTick, bool show)
++{
++    std::unique_lock<std::recursive_mutex> stateLock(m_stateMutex, std::try_to_lock);
++    if (!stateLock || !m_backend || !m_privRegs)
++        return false;
++    std::unique_lock<std::mutex> displayLock(displayMutex, std::try_to_lock);
++    if (!displayLock)
++        return false;
++    const auto request = buildPresentationRequestUnlocked();
++    capturedTick = request.vsyncTick;
++    displayLock.unlock();
++    return m_backend->PresentToWindow(request, show);
++}
++
+ std::optional<PresentationFrame> GS::tryHostPresentationFrame(std::mutex &displayMutex, uint64_t &capturedTick,
+                                                               bool useContextFallback, bool weave)
+ {
+@@ -1166,6 +1180,11 @@
+ 
+ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
+ {
++#if defined(PS2APPLE_IOS)
++    if (m_backend && (regAddr == GS_REG_TEX0_1 || regAddr == GS_REG_TEX0_2 ||
++                      regAddr == GS_REG_TEX2_1 || regAddr == GS_REG_TEX2_2 || regAddr == GS_REG_TEXCLUT))
++        m_backend->PaletteRegister(regAddr, value);
++#endif
+     const bool interestingReg =
+         regAddr == GS_REG_PRIM ||
+         regAddr == GS_REG_RGBAQ ||
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -440,6 +440,19 @@
+     height = lastHeight;
+     auto &memory = rt->memory();
+     const uint64_t tick = memory.gs().vsyncTick.load(std::memory_order_acquire);
++    if (PS2MetalScanoutSelected())
++    {
++        if (PS2MetalScanoutAvailable() && tick != lastTick)
++        {
++            constexpr uint64_t notCaptured = std::numeric_limits<uint64_t>::max();
++            uint64_t capturedTick = notCaptured;
++            if (rt->gs().tryHostMetalPresent(memory.gsAccessMutex(), capturedTick, PS2ScanoutDue()))
++                PS2MetalPresented();
++            if (capturedTick != notCaptured)
++                lastTick = capturedTick;
++        }
++        return;
++    }
+     if (tick != lastTick)
+     {
+         constexpr uint64_t notCaptured = std::numeric_limits<uint64_t>::max();

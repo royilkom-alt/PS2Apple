@@ -1,0 +1,45 @@
+--- a/ps2xRuntime/src/lib/ps2_audio.cpp
++++ b/ps2xRuntime/src/lib/ps2_audio.cpp
+@@ -13,9 +13,9 @@
+ // raylib callbacks carry no user data. Bounded slots own shared queue lifetimes;
+ // callbacks never touch the runtime, guest RAM, or the backend control mutex.
+ constexpr size_t PcmSlots=32;
+-std::array<std::atomic<std::shared_ptr<PS2PcmQueue>>,PcmSlots> pcmSlots;
++std::array<std::shared_ptr<PS2PcmQueue>,PcmSlots> pcmSlots;
+ template<size_t I> void pcmCallback(void* output,unsigned frames) {
+-    auto queue=pcmSlots[I].load();
++    auto queue=std::atomic_load(&pcmSlots[I]);
+     std::span<int16_t> samples(static_cast<int16_t*>(output),size_t(frames)*2);
+     if(queue)queue->pull(samples);else std::fill(samples.begin(),samples.end(),0);
+ }
+@@ -357,7 +357,7 @@
+     return;
+ #else
+     for(auto& [key,p]:m_impl->pcm) {
+-        StopAudioStream(p.stream);UnloadAudioStream(p.stream);pcmSlots[p.slot].store(nullptr);
++        StopAudioStream(p.stream);UnloadAudioStream(p.stream);std::atomic_store(&pcmSlots[p.slot],std::shared_ptr<PS2PcmQueue>{});
+     }
+     m_impl->pcm.clear();
+     for (auto &t : m_impl->activeSounds)
+@@ -381,11 +381,11 @@
+         auto queue=std::make_shared<PS2PcmQueue>();size_t slot=0;
+         for(;slot<PcmSlots;++slot) {
+             std::shared_ptr<PS2PcmQueue> empty;
+-            if(pcmSlots[slot].compare_exchange_strong(empty,queue))break;
++            if(std::atomic_compare_exchange_strong(&pcmSlots[slot],&empty,queue))break;
+         }
+         if(slot==PcmSlots)return false;
+         auto stream=LoadAudioStream(rate,16,2);
+-        if(!stream.buffer) {pcmSlots[slot].store(nullptr);return false;}
++        if(!stream.buffer) {std::atomic_store(&pcmSlots[slot],std::shared_ptr<PS2PcmQueue>{});return false;}
+         SetAudioStreamCallback(stream,PcmCallbacks[slot]);
+         it=m_impl->pcm.emplace(key,Impl::PcmStream{stream,queue,slot,rate,rate,false}).first;
+         PlayAudioStream(stream);
+@@ -417,5 +417,5 @@
+ #if !defined(PLATFORM_VITA)
+     StopAudioStream(it->second.stream);UnloadAudioStream(it->second.stream);
+ #endif
+-    pcmSlots[it->second.slot].store(nullptr);m_impl->pcm.erase(it);
+-}
++    std::atomic_store(&pcmSlots[it->second.slot],std::shared_ptr<PS2PcmQueue>{});m_impl->pcm.erase(it);
++}

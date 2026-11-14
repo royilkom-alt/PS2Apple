@@ -1,0 +1,809 @@
+diff --git a/port/hle/gamepad.c b/port/hle/gamepad.c
+index 133f7f4..4bed409 100644
+--- a/port/hle/gamepad.c
++++ b/port/hle/gamepad.c
+@@ -254,6 +254,12 @@ int gamepad_thread_start(void)
+     }
+     int count = 0;
+     SDL_JoystickID *ids = SDL_GetJoysticks(&count);
++#ifdef DHD_IOS
++    SDL_JoystickID dhd_ios_selected_gamepad(void);
++    SDL_JoystickID selected = dhd_ios_selected_gamepad();
++    for (int i = 0; ids && i < count; i++)
++        if (ids[i] == selected) { attach(selected); break; }
++#endif
+     for (int i = 0; ids && i < count; i++) attach(ids[i]);
+     SDL_free(ids);
+     SDL_SetAtomicInt(&running, 1);
+diff --git a/port/hle/settings_table.h b/port/hle/settings_table.h
+index bb3ef64..8d2283c 100644
+--- a/port/hle/settings_table.h
++++ b/port/hle/settings_table.h
+@@ -25,10 +25,11 @@ static const SettingChoice setting_choices_font[] = {{"original", "Original"}, {
+ static const SettingChoice setting_choices_shadows[] = {{"0", "OFF"}, {"1", "ON"}};
+ static const SettingChoice setting_choices_lens_flare[] = {{"0", "OFF"}, {"1", "ON"}};
+ static const SettingChoice setting_choices_particles[] = {{"0", "OFF"}, {"1", "ON"}};
+-static const SettingChoice setting_choices_fps[] = {{"60", "60 fps"}, {"120", "120 fps"}, {"144", "144 fps"}, {"165", "165 fps"}, {"240", "240 fps"}, {"monitor", "Monitor"}};
++static const SettingChoice setting_choices_fps[] = {{"30", "30 fps"}, {"60", "60 fps"}, {"120", "120 fps"}, {"144", "144 fps"}, {"165", "165 fps"}, {"240", "240 fps"}, {"monitor", "Monitor"}};
+ static const SettingChoice setting_choices_vsync[] = {{"0", "OFF"}, {"1", "ON"}};
+ static const SettingChoice setting_choices_perf_counter[] = {{"0", "OFF"}, {"1", "ON"}};
+ static const SettingChoice setting_choices_unlock_all[] = {{"0", "OFF"}, {"1", "ON"}};
++static const SettingChoice setting_choices_touch_enabled[] = {{"0", "OFF"}, {"1", "ON"}};
+ static const SettingChoice setting_choices_touch_preset[] = {{"thumb", "Thumb zones"}, {"classic", "Classic pad"}};
+ static const SettingChoice setting_choices_touch_hand[] = {{"right", "Right"}, {"left", "Left"}};
+ static const SettingChoice setting_choices_touch_steer[] = {{"stick", "Stick"}, {"tilt", "Tilt"}};
+@@ -64,10 +65,11 @@ static const SettingInfo setting_table[] = {
+     {"shadows", "DHD_SHADOWS", "1", setting_choices_shadows, 2},
+     {"lens_flare", "DHD_LENS_FLARE", "1", setting_choices_lens_flare, 2},
+     {"particles", "DHD_PARTICLES", "1", setting_choices_particles, 2},
+-    {"fps", "DHD_FPS", "60", setting_choices_fps, 6},
++    {"fps", "DHD_FPS", "60", setting_choices_fps, 7},
+     {"vsync", "DHD_VSYNC", "0", setting_choices_vsync, 2},
+     {"perf_counter", "DHD_PERF_COUNTER", "0", setting_choices_perf_counter, 2},
+     {"unlock_all", "DHD_UNLOCK_ALL", "0", setting_choices_unlock_all, 2},
++    {"touch_enabled", "DHD_TOUCH_ENABLED", "1", setting_choices_touch_enabled, 2},
+     {"touch_preset", "DHD_TOUCH_PRESET", "classic", setting_choices_touch_preset, 2},
+     {"touch_hand", "DHD_TOUCH_HAND", "right", setting_choices_touch_hand, 2},
+     {"touch_steer", "DHD_TOUCH_STEER", "stick", setting_choices_touch_steer, 2},
+diff --git a/port/host/touch_host.c b/port/host/touch_host.c
+index e206552..86c9325 100644
+--- a/port/host/touch_host.c
++++ b/port/host/touch_host.c
+@@ -81,8 +81,9 @@ static int touch_on(void)
+         gs_mouse_touchscreen();   /* else the menus' first reading takes the first tap as its baseline */
+         SDL_SetAtomicInt(&tilt_sensor, -1);   /* the first tick asks */
+ #elif defined(DHD_IOS)
+-        available = 1;
+-        gs_mouse_touchscreen();
++        const char *enabled = getenv("DHD_TOUCH_ENABLED");
++        available = !enabled || atoi(enabled) != 0;
++        if (available) gs_mouse_touchscreen();
+         SDL_SetAtomicInt(&tilt_sensor, 0);
+ #else
+         const char *mouse = getenv("DHD_TOUCH_MOUSE");
+diff --git a/port/ios/launcher.h b/port/ios/launcher.h
+new file mode 100644
+index 0000000..ded3e99
+--- /dev/null
++++ b/port/ios/launcher.h
+@@ -0,0 +1,9 @@
++/* Native iOS prelaunch UI. GPL-3.0-or-later, following the Downhill Revived port. */
++#ifndef DHD_IOS_LAUNCHER_H
++#define DHD_IOS_LAUNCHER_H
++#include <stdbool.h>
++#include <SDL3/SDL_joystick.h>
++bool dhd_ios_prelaunch(const char *disc, const char *settings);
++SDL_JoystickID dhd_ios_selected_gamepad(void);
++void dhd_ios_launcher_finish(void);
++#endif
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+new file mode 100644
+index 0000000..5317326
+--- /dev/null
++++ b/port/ios/launcher.m
+@@ -0,0 +1,598 @@
++/* Native prelaunch settings for the iOS port. GPL-3.0-or-later. */
++#import <UIKit/UIKit.h>
++#import <QuartzCore/QuartzCore.h>
++#include <SDL3/SDL.h>
++#include <math.h>
++#include <stdio.h>
++#include "launcher.h"
++#include "../render/include/dhd_settings.h"
++
++const char *host_disc_check(const char *path);
++static SDL_JoystickID chosen_gamepad;
++static bool gamepads_started;
++
++SDL_JoystickID dhd_ios_selected_gamepad(void) { return chosen_gamepad; }
++
++void dhd_ios_launcher_finish(void)
++{
++    if (gamepads_started) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
++    gamepads_started = false;
++}
++
++static UIColor *DHDColor(unsigned hex, CGFloat alpha)
++{
++    return [UIColor colorWithRed:((hex >> 16) & 255) / 255.0
++                           green:((hex >> 8) & 255) / 255.0
++                            blue:(hex & 255) / 255.0 alpha:alpha];
++}
++
++static UILabel *DHDLabel(NSString *text, CGFloat size, UIFontWeight weight)
++{
++    UILabel *label = [[UILabel alloc] init];
++    label.text = text;
++    label.font = [UIFont systemFontOfSize:size weight:weight];
++    label.textColor = DHDColor(0xEBF3FF, 1);
++    label.numberOfLines = 0;
++    return label;
++}
++
++static BOOL DHDEnabled(NSString *value)
++{
++    return ![@[@"0", @"off", @"false", @"no"] containsObject:value.lowercaseString];
++}
++
++@interface DHDBackdrop : UIView
++@end
++
++@implementation DHDBackdrop
++- (instancetype)init
++{
++    self = [super init];
++    if (self) {
++        self.backgroundColor = DHDColor(0x020611, 1);
++        self.userInteractionEnabled = NO;
++        CALayer *halo = [CALayer layer];
++        halo.name = @"halo";
++        halo.backgroundColor = DHDColor(0x0578FF, 0.1).CGColor;
++        halo.shadowColor = DHDColor(0x3A92FF, 1).CGColor;
++        halo.shadowOpacity = 0.45;
++        halo.shadowRadius = 65;
++        [self.layer addSublayer:halo];
++        if (!UIAccessibilityIsReduceMotionEnabled()) {
++            CABasicAnimation *breath = [CABasicAnimation animationWithKeyPath:@"opacity"];
++            breath.fromValue = @0.35;
++            breath.toValue = @1;
++            breath.duration = 4;
++            breath.autoreverses = YES;
++            breath.repeatCount = HUGE_VALF;
++            [halo addAnimation:breath forKey:@"breath"];
++        }
++    }
++    return self;
++}
++
++- (void)layoutSubviews
++{
++    [super layoutSubviews];
++    CALayer *halo = self.layer.sublayers.firstObject;
++    CGFloat diameter = self.bounds.size.height * 0.8;
++    halo.frame = CGRectMake(-diameter * 0.2, -diameter * 0.3, diameter, diameter);
++    halo.cornerRadius = diameter / 2;
++    [self setNeedsDisplay];
++}
++
++- (void)drawRect:(CGRect)rect
++{
++    CGContextRef context = UIGraphicsGetCurrentContext();
++    CGFloat width = rect.size.width, height = rect.size.height;
++    for (int i = 0; i < 17; i++) {
++        CGFloat x = width * (i / 17.0);
++        CGFloat towerWidth = MAX(12, width / 35);
++        CGFloat towerHeight = height * (0.14 + ((i * 7) % 11) / 26.0);
++        CGFloat y = height - towerHeight;
++        CGContextSetFillColorWithColor(context, DHDColor(0x123268, 0.20).CGColor);
++        CGContextFillRect(context, CGRectMake(x, y, towerWidth, towerHeight));
++        UIBezierPath *top = [UIBezierPath bezierPath];
++        [top moveToPoint:CGPointMake(x, y)];
++        [top addLineToPoint:CGPointMake(x + towerWidth / 2, y - towerWidth / 3)];
++        [top addLineToPoint:CGPointMake(x + towerWidth * 1.5, y - towerWidth / 3)];
++        [top addLineToPoint:CGPointMake(x + towerWidth, y)];
++        [top closePath];
++        [DHDColor(0x3678CB, 0.22) setFill];
++        [top fill];
++    }
++    for (int i = 0; i < 40; i++) {
++        CGFloat x = width * (((i * 37) % 101) / 101.0);
++        CGFloat y = height * (((i * 19) % 97) / 97.0);
++        CGContextSetFillColorWithColor(context, DHDColor(0x7EB8FF, i % 3 ? 0.13 : 0.35).CGColor);
++        CGContextFillEllipseInRect(context, CGRectMake(x, y, 2, 2));
++    }
++}
++@end
++
++@interface DHDLauncher : UIViewController
++@property(nonatomic, copy) NSString *disc;
++@property(nonatomic, copy) NSString *settingsPath;
++@property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *values;
++@property(nonatomic, strong) NSArray<NSDictionary *> *pads;
++@property(nonatomic, strong) NSTimer *controllerTimer;
++@property(nonatomic, strong) UIStackView *rows;
++@property(nonatomic, strong) UISegmentedControl *tabs;
++@property(nonatomic, strong) UILabel *summary;
++@property(nonatomic, strong) UILabel *discStatus;
++@property(nonatomic, strong) UIButton *playButton;
++@property(nonatomic, weak) UIButton *gamepadButton;
++@property(nonatomic, copy) NSString *menuSelection;
++@property(nonatomic) BOOL wantsPlay;
++@end
++
++@implementation DHDLauncher
++- (NSString *)value:(NSString *)key fallback:(NSString *)fallback
++{
++    NSString *value = self.values[key];
++    if (value) return value;
++    char text[1024] = {0};
++    if (dhd_settings_read(self.settingsPath.fileSystemRepresentation, key.UTF8String, text, sizeof text))
++        value = [NSString stringWithUTF8String:text];
++    value = value.length ? value : fallback;
++    if (![key isEqualToString:@"ios_gamepad"]) value = value.lowercaseString;
++    self.values[key] = value;
++    return value;
++}
++
++- (BOOL)prefersStatusBarHidden { return YES; }
++- (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
++- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
++
++- (void)viewDidLoad
++{
++    [super viewDidLoad];
++    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
++    self.values = [NSMutableDictionary dictionary];
++    self.pads = @[];
++    DHDBackdrop *backdrop = [[DHDBackdrop alloc] init];
++    backdrop.frame = self.view.bounds;
++    backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
++    [self.view addSubview:backdrop];
++
++    UIView *content = [[UIView alloc] init];
++    content.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.view addSubview:content];
++    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
++    [NSLayoutConstraint activateConstraints:@[
++        [content.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
++        [content.topAnchor constraintEqualToAnchor:safe.topAnchor constant:12],
++        [content.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-12],
++        [content.widthAnchor constraintLessThanOrEqualToConstant:1120],
++        [content.leadingAnchor constraintGreaterThanOrEqualToAnchor:safe.leadingAnchor constant:20],
++        [content.trailingAnchor constraintLessThanOrEqualToAnchor:safe.trailingAnchor constant:-20],
++    ]];
++    NSLayoutConstraint *fillWidth = [content.widthAnchor constraintEqualToAnchor:safe.widthAnchor constant:-40];
++    fillWidth.priority = UILayoutPriorityDefaultHigh;
++    fillWidth.active = YES;
++
++    UILabel *brand = DHDLabel(@"PS2", 30, UIFontWeightUltraLight);
++    brand.attributedText = [[NSAttributedString alloc] initWithString:@"PS2"
++        attributes:@{NSKernAttributeName:@7, NSForegroundColorAttributeName:DHDColor(0x89BEFF, 1)}];
++    UILabel *identity = DHDLabel(@"NATIVE  /  iSOLUTION", 10, UIFontWeightSemibold);
++    identity.textColor = DHDColor(0x7C96BB, 1);
++    UIStackView *header = [[UIStackView alloc] initWithArrangedSubviews:@[brand, identity]];
++    header.spacing = 15;
++    header.alignment = UIStackViewAlignmentCenter;
++    header.translatesAutoresizingMaskIntoConstraints = NO;
++    [content addSubview:header];
++
++    self.discStatus = DHDLabel(@"Checking disc…", 11, UIFontWeightMedium);
++    self.discStatus.translatesAutoresizingMaskIntoConstraints = NO;
++    [content addSubview:self.discStatus];
++
++    UIScrollView *heroScroll = [[UIScrollView alloc] init];
++    heroScroll.showsVerticalScrollIndicator = NO;
++    heroScroll.translatesAutoresizingMaskIntoConstraints = NO;
++    [content addSubview:heroScroll];
++    UIImageView *discImage = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"opticaldisc.fill"]];
++    discImage.tintColor = DHDColor(0x6DAFFF, 0.9);
++    discImage.contentMode = UIViewContentModeScaleAspectFit;
++    [discImage.heightAnchor constraintEqualToConstant:58].active = YES;
++    UILabel *edition = DHDLabel(@"PLAYSTATION 2  •  USA", 9, UIFontWeightSemibold);
++    edition.textColor = DHDColor(0x75A9E5, 1);
++    UILabel *title = DHDLabel(@"Downhill\nDomination", 29, UIFontWeightBold);
++    title.adjustsFontSizeToFitWidth = YES;
++    title.minimumScaleFactor = 0.8;
++    UILabel *serial = DHDLabel(@"SCUS-97177", 10, UIFontWeightMedium);
++    serial.textColor = DHDColor(0x7187A6, 1);
++    self.summary = DHDLabel(@"", 12, UIFontWeightRegular);
++    self.summary.textColor = DHDColor(0xA8BFD9, 1);
++    UIStackView *hero = [[UIStackView alloc] initWithArrangedSubviews:@[discImage, edition, title, serial, self.summary]];
++    hero.axis = UILayoutConstraintAxisVertical;
++    hero.alignment = UIStackViewAlignmentLeading;
++    hero.spacing = 9;
++    hero.translatesAutoresizingMaskIntoConstraints = NO;
++    [heroScroll addSubview:hero];
++    [NSLayoutConstraint activateConstraints:@[
++        [hero.leadingAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.leadingAnchor],
++        [hero.trailingAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.trailingAnchor],
++        [hero.topAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.topAnchor constant:12],
++        [hero.bottomAnchor constraintEqualToAnchor:heroScroll.contentLayoutGuide.bottomAnchor constant:-12],
++        [hero.widthAnchor constraintEqualToAnchor:heroScroll.frameLayoutGuide.widthAnchor],
++        [discImage.widthAnchor constraintEqualToConstant:58],
++    ]];
++
++    UIView *panel = [[UIView alloc] init];
++    panel.backgroundColor = DHDColor(0x0C172C, 0.93);
++    panel.layer.cornerRadius = 20;
++    panel.layer.borderWidth = 1;
++    panel.layer.borderColor = DHDColor(0x7AAEFF, 0.14).CGColor;
++    panel.clipsToBounds = YES;
++    panel.translatesAutoresizingMaskIntoConstraints = NO;
++    [content addSubview:panel];
++    UISegmentedControl *tabs = [[UISegmentedControl alloc] initWithItems:@[@"Graphics", @"Controls", @"Performance"]];
++    self.tabs = tabs;
++    tabs.selectedSegmentIndex = 0;
++    tabs.selectedSegmentTintColor = DHDColor(0x254978, 1);
++    tabs.translatesAutoresizingMaskIntoConstraints = NO;
++    [tabs addTarget:self action:@selector(changeTab:) forControlEvents:UIControlEventValueChanged];
++    [panel addSubview:tabs];
++    UIScrollView *scroll = [[UIScrollView alloc] init];
++    scroll.alwaysBounceVertical = YES;
++    scroll.translatesAutoresizingMaskIntoConstraints = NO;
++    [panel addSubview:scroll];
++    self.rows = [[UIStackView alloc] init];
++    self.rows.axis = UILayoutConstraintAxisVertical;
++    self.rows.translatesAutoresizingMaskIntoConstraints = NO;
++    [scroll addSubview:self.rows];
++
++    UIButtonConfiguration *configuration = [UIButtonConfiguration filledButtonConfiguration];
++    configuration.title = @"Play game";
++    configuration.image = [UIImage systemImageNamed:@"play.fill"];
++    configuration.imagePadding = 12;
++    configuration.baseBackgroundColor = DHDColor(0x91C5FF, 1);
++    configuration.baseForegroundColor = DHDColor(0x031326, 1);
++    configuration.cornerStyle = UIButtonConfigurationCornerStyleLarge;
++    self.playButton = [UIButton buttonWithConfiguration:configuration primaryAction:nil];
++    self.playButton.accessibilityLabel = @"Play Downhill Domination";
++    self.playButton.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
++    [content addSubview:self.playButton];
++    UIButton *check = [UIButton buttonWithType:UIButtonTypeSystem];
++    [check setTitle:@"Check ISO" forState:UIControlStateNormal];
++    check.tintColor = DHDColor(0xA2C7F7, 1);
++    check.translatesAutoresizingMaskIntoConstraints = NO;
++    [check addTarget:self action:@selector(checkDisc) forControlEvents:UIControlEventTouchUpInside];
++    [content addSubview:check];
++
++    [NSLayoutConstraint activateConstraints:@[
++        [header.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
++        [header.topAnchor constraintEqualToAnchor:content.topAnchor],
++        [header.heightAnchor constraintEqualToConstant:38],
++        [self.discStatus.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
++        [self.discStatus.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
++        [self.discStatus.leadingAnchor constraintGreaterThanOrEqualToAnchor:header.trailingAnchor constant:12],
++        [self.playButton.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
++        [self.playButton.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
++        [self.playButton.heightAnchor constraintEqualToConstant:50],
++        [self.playButton.widthAnchor constraintEqualToAnchor:panel.widthAnchor],
++        [check.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
++        [check.centerYAnchor constraintEqualToAnchor:self.playButton.centerYAnchor],
++        [check.heightAnchor constraintGreaterThanOrEqualToConstant:44],
++        [heroScroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
++        [heroScroll.topAnchor constraintEqualToAnchor:header.bottomAnchor constant:12],
++        [heroScroll.bottomAnchor constraintEqualToAnchor:self.playButton.topAnchor constant:-12],
++        [heroScroll.widthAnchor constraintEqualToAnchor:content.widthAnchor multiplier:0.31],
++        [panel.leadingAnchor constraintEqualToAnchor:heroScroll.trailingAnchor constant:20],
++        [panel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
++        [panel.topAnchor constraintEqualToAnchor:heroScroll.topAnchor],
++        [panel.bottomAnchor constraintEqualToAnchor:heroScroll.bottomAnchor],
++        [tabs.topAnchor constraintEqualToAnchor:panel.topAnchor constant:14],
++        [tabs.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor constant:14],
++        [tabs.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor constant:-14],
++        [tabs.heightAnchor constraintEqualToConstant:34],
++        [scroll.topAnchor constraintEqualToAnchor:tabs.bottomAnchor constant:8],
++        [scroll.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor],
++        [scroll.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
++        [scroll.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor],
++        [self.rows.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:16],
++        [self.rows.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-16],
++        [self.rows.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
++        [self.rows.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-12],
++        [self.rows.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-32],
++    ]];
++    [self value:@"ios_gamepad" fallback:@"auto"];
++    [self value:@"touch_enabled" fallback:@"1"];
++    [self refreshControllers];
++    [self changeTab:tabs];
++    [self checkDisc];
++    __weak DHDLauncher *weakSelf = self;
++    self.controllerTimer = [NSTimer timerWithTimeInterval:1 repeats:YES block:^(NSTimer *timer) {
++        (void)timer;
++        [weakSelf refreshControllers];
++    }];
++    [[NSRunLoop mainRunLoop] addTimer:self.controllerTimer forMode:NSRunLoopCommonModes];
++}
++
++- (UIView *)row:(NSString *)title control:(UIView *)control
++{
++    UIView *row = [[UIView alloc] init];
++    UILabel *label = DHDLabel(title, 13, UIFontWeightMedium);
++    label.translatesAutoresizingMaskIntoConstraints = NO;
++    control.translatesAutoresizingMaskIntoConstraints = NO;
++    [row addSubview:label];
++    [row addSubview:control];
++    [NSLayoutConstraint activateConstraints:@[
++        [row.heightAnchor constraintGreaterThanOrEqualToConstant:56],
++        [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
++        [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
++        [label.topAnchor constraintGreaterThanOrEqualToAnchor:row.topAnchor constant:8],
++        [label.bottomAnchor constraintLessThanOrEqualToAnchor:row.bottomAnchor constant:-8],
++        [label.trailingAnchor constraintLessThanOrEqualToAnchor:control.leadingAnchor constant:-12],
++        [control.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
++        [control.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
++    ]];
++    NSLayoutConstraint *height = [row.heightAnchor constraintEqualToConstant:56];
++    height.priority = UILayoutPriorityDefaultHigh;
++    height.active = YES;
++    [self.rows addArrangedSubview:row];
++    UIView *line = [[UIView alloc] init];
++    line.backgroundColor = DHDColor(0x7CA9DF, 0.08);
++    [line.heightAnchor constraintEqualToConstant:0.5].active = YES;
++    [self.rows addArrangedSubview:line];
++    return row;
++}
++
++- (void)choice:(NSString *)title key:(NSString *)key values:(NSArray<NSString *> *)values
++        labels:(NSArray<NSString *> *)labels fallback:(NSString *)fallback
++{
++    NSString *current = [self value:key fallback:fallback];
++    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
++    button.tintColor = DHDColor(0x9FC9FF, 1);
++    button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
++    button.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
++    NSUInteger index = [values indexOfObject:current];
++    [button setTitle:index == NSNotFound ? current : labels[index] forState:UIControlStateNormal];
++    [button.widthAnchor constraintEqualToConstant:147].active = YES;
++    [button.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
++    __weak DHDLauncher *weakSelf = self;
++    __weak UIButton *weakButton = button;
++    NSMutableArray<UIAction *> *actions = [NSMutableArray array];
++    for (NSUInteger i = 0; i < values.count; i++) {
++        NSString *value = values[i], *label = labels[i];
++        UIAction *action = [UIAction actionWithTitle:label image:nil identifier:value handler:^(UIAction *selected) {
++            weakSelf.values[key] = value;
++            [weakButton setTitle:label forState:UIControlStateNormal];
++            for (UIAction *item in weakButton.menu.children)
++                item.state = item == selected ? UIMenuElementStateOn : UIMenuElementStateOff;
++            [weakSelf refreshSummary];
++            if ([key isEqualToString:@"renderer"]) [weakSelf changeTab:weakSelf.tabs];
++        }];
++        action.state = [value isEqualToString:current] ? UIMenuElementStateOn : UIMenuElementStateOff;
++        [actions addObject:action];
++    }
++    button.menu = [UIMenu menuWithTitle:title children:actions];
++    button.showsMenuAsPrimaryAction = YES;
++    UIView *row = [self row:title control:button];
++    if ([@[@"scale", @"DHD_ASPECT", @"DHD_PRESENT_FILTER"] containsObject:key]) {
++        button.enabled = [[self value:@"renderer" fallback:@"native"] isEqualToString:@"native"];
++        row.alpha = button.enabled ? 1 : 0.4;
++    }
++}
++
++- (void)toggle:(NSString *)title key:(NSString *)key fallback:(NSString *)fallback
++{
++    UISwitch *control = [[UISwitch alloc] init];
++    control.onTintColor = DHDColor(0x396DAB, 1);
++    control.on = DHDEnabled([self value:key fallback:fallback]);
++    control.accessibilityLabel = title;
++    __weak DHDLauncher *weakSelf = self;
++    [control addAction:[UIAction actionWithHandler:^(UIAction *action) {
++        UISwitch *sender = (UISwitch *)action.sender;
++        weakSelf.values[key] = sender.on ? @"1" : @"0";
++        [weakSelf refreshSummary];
++    }] forControlEvents:UIControlEventValueChanged];
++    [self row:title control:control];
++}
++
++- (void)changeTab:(UISegmentedControl *)sender
++{
++    for (UIView *view in self.rows.arrangedSubviews.copy) {
++        [self.rows removeArrangedSubview:view];
++        [view removeFromSuperview];
++    }
++    if (sender.selectedSegmentIndex == 0) {
++        [self choice:@"Graphics backend" key:@"renderer" values:@[@"native", @"exact"]
++              labels:@[@"Native · Metal", @"Exact · Metal"] fallback:@"native"];
++        [self choice:@"Screen mode" key:@"DHD_ASPECT" values:@[@"wide", @"stretch", @"4:3", @"16:9", @"pixels"]
++              labels:@[@"Fit screen", @"Fullscreen · stretch", @"Original 4:3", @"16:9", @"Pixel perfect"] fallback:@"wide"];
++        [self choice:@"Internal resolution" key:@"scale" values:@[@"1", @"2", @"3", @"4", @"window"]
++              labels:@[@"1× · original", @"2×", @"3×", @"4×", @"Match display"] fallback:@"2"];
++        [self choice:@"Image filtering" key:@"DHD_PRESENT_FILTER" values:@[@"linear", @"point"]
++              labels:@[@"Smooth", @"Sharp"] fallback:@"linear"];
++        [self toggle:@"Widescreen camera" key:@"widescreen" fallback:@"1"];
++        [self toggle:@"Rider shadows" key:@"shadows" fallback:@"1"];
++        [self toggle:@"Lens flare" key:@"lens_flare" fallback:@"1"];
++        [self toggle:@"Particle effects" key:@"particles" fallback:@"1"];
++    } else if (sender.selectedSegmentIndex == 1) {
++        [self toggle:@"Virtual controller" key:@"touch_enabled" fallback:@"1"];
++        [self choice:@"Touch layout" key:@"touch_preset" values:@[@"classic", @"thumb"]
++              labels:@[@"Classic pad", @"Thumb zones"] fallback:@"classic"];
++        [self choice:@"Button size" key:@"touch_size" values:@[@"auto", @"70", @"85", @"100", @"105"]
++              labels:@[@"Auto", @"70%", @"85%", @"100%", @"105%"] fallback:@"auto"];
++        [self choice:@"Button opacity" key:@"touch_opacity" values:@[@"25", @"40", @"60", @"80", @"100"]
++              labels:@[@"25%", @"40%", @"60%", @"80%", @"100%"] fallback:@"60"];
++        [self choice:@"Analog stick" key:@"touch_stick" values:@[@"floating", @"fixed"]
++              labels:@[@"Floating", @"Fixed"] fallback:@"floating"];
++        [self choice:@"Touch with gamepad" key:@"touch_with_pad" values:@[@"hide", @"show"]
++              labels:@[@"Auto-hide buttons", @"Keep buttons visible"] fallback:@"hide"];
++        UIButton *gamepad = [UIButton buttonWithType:UIButtonTypeSystem];
++        gamepad.tintColor = DHDColor(0x9FC9FF, 1);
++        gamepad.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
++        gamepad.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
++        gamepad.showsMenuAsPrimaryAction = YES;
++        [gamepad.widthAnchor constraintEqualToConstant:147].active = YES;
++        [gamepad.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
++        self.gamepadButton = gamepad;
++        [self row:@"Player 1 gamepad" control:gamepad];
++        [self refreshControllers];
++        [self choice:@"Button symbols" key:@"prompts" values:@[@"auto", @"playstation", @"xbox", @"nintendo"]
++              labels:@[@"Auto", @"PlayStation", @"Xbox", @"Nintendo"] fallback:@"auto"];
++        [self choice:@"Stick dead zone" key:@"stick_dead_zone" values:@[@"game", @"5", @"10", @"15", @"20"]
++              labels:@[@"Game default", @"5%", @"10%", @"15%", @"20%"] fallback:@"game"];
++        [self toggle:@"Gamepad vibration" key:@"vibration" fallback:@"1"];
++        [self toggle:@"Touch haptics" key:@"touch_vibration" fallback:@"1"];
++    } else {
++        [self choice:@"FPS limit" key:@"fps" values:@[@"30", @"60", @"120", @"monitor"]
++              labels:@[@"30 FPS", @"60 FPS", @"120 FPS", @"Auto · display"] fallback:@"60"];
++        [self toggle:@"VSync" key:@"vsync" fallback:@"1"];
++        [self toggle:@"Show FPS counter" key:@"perf_counter" fallback:@"0"];
++        UILabel *note = DHDLabel(@"The FPS limit is a target. Actual frame rate depends on the device, resolution and effects.", 11, UIFontWeightRegular);
++        note.textColor = DHDColor(0x8198B8, 1);
++        [self.rows addArrangedSubview:note];
++    }
++    [self refreshSummary];
++}
++
++- (void)refreshSummary
++{
++    NSString *scale = [self value:@"scale" fallback:@"2"];
++    NSString *fps = [self value:@"fps" fallback:@"60"];
++    BOOL native = [[self value:@"renderer" fallback:@"native"] isEqualToString:@"native"];
++    NSString *size = [scale isEqualToString:@"window"] ? @"Display resolution" : [scale stringByAppendingString:@"× resolution"];
++    if (!native) size = @"Exact rendering";
++    NSString *rate = [fps isEqualToString:@"monitor"] ? @"Display FPS" : [fps stringByAppendingString:@" FPS limit"];
++    BOOL touch = DHDEnabled([self value:@"touch_enabled" fallback:@"1"]);
++    self.summary.text = [NSString stringWithFormat:@"%@\n%@\n%@", size, rate,
++                        touch ? @"Virtual controller ready" : @"Gamepad controls"];
++}
++
++- (void)refreshControllers
++{
++    if (gamepads_started) SDL_PumpEvents();
++    int count = 0;
++    SDL_JoystickID *ids = gamepads_started ? SDL_GetGamepads(&count) : NULL;
++    NSMutableArray<NSDictionary *> *pads = [NSMutableArray array];
++    NSMutableDictionary<NSString *, NSNumber *> *occurrences = [NSMutableDictionary dictionary];
++    for (int i = 0; ids && i < count; i++) {
++        const char *name = SDL_GetGamepadNameForID(ids[i]);
++        NSString *label = name ? [NSString stringWithUTF8String:name] : @"Gamepad";
++        char guid[33];
++        SDL_GUIDToString(SDL_GetGamepadGUIDForID(ids[i]), guid, sizeof guid);
++        NSString *base = [NSString stringWithUTF8String:guid];
++        NSUInteger occurrence = [occurrences[base] unsignedIntegerValue];
++        occurrences[base] = @(occurrence + 1);
++        NSString *key = [base stringByAppendingFormat:@"|%lu", (unsigned long)occurrence];
++        [pads addObject:@{@"key":key, @"name":label ?: @"Gamepad", @"id":@(ids[i])}];
++    }
++    SDL_free(ids);
++    BOOL samePads = [self.pads isEqualToArray:pads];
++    self.pads = pads;
++    UIButton *button = self.gamepadButton;
++    if (!button) return;
++    NSString *selected = [self value:@"ios_gamepad" fallback:@"auto"];
++    if (samePads && button.menu && [self.menuSelection isEqualToString:selected]) return;
++    self.menuSelection = selected;
++    NSMutableArray<UIAction *> *actions = [NSMutableArray array];
++    NSArray *options = [@[@{@"key":@"auto", @"name":@"Auto"}] arrayByAddingObjectsFromArray:pads];
++    NSString *title = [selected isEqualToString:@"auto"] ? @"Auto" : @"Reconnect gamepad";
++    __weak DHDLauncher *weakSelf = self;
++    for (NSDictionary *option in options) {
++        NSString *key = option[@"key"], *name = option[@"name"];
++        UIAction *action = [UIAction actionWithTitle:name image:nil identifier:key handler:^(UIAction *item) {
++            (void)item;
++            weakSelf.values[@"ios_gamepad"] = key;
++            [weakSelf refreshControllers];
++        }];
++        action.state = [selected isEqualToString:key] ? UIMenuElementStateOn : UIMenuElementStateOff;
++        if (action.state == UIMenuElementStateOn) title = name;
++        [actions addObject:action];
++    }
++    [button setTitle:title forState:UIControlStateNormal];
++    button.menu = [UIMenu menuWithTitle:count ? @"Player 1 controller" : @"Pair a gamepad in iOS Bluetooth settings"
++                             children:actions];
++}
++
++- (void)alert:(NSString *)title message:(NSString *)message
++{
++    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message
++        preferredStyle:UIAlertControllerStyleAlert];
++    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
++    [self presentViewController:alert animated:YES completion:nil];
++}
++
++- (void)checkDisc
++{
++    const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
++    self.playButton.enabled = problem == NULL;
++    self.discStatus.text = problem ? @"ISO needed  •  SCUS-97177.iso" : @"●  DISC READY  •  METAL";
++    self.discStatus.textColor = DHDColor(problem ? 0xD7AE76 : 0x8BD9CE, 1);
++}
++
++- (void)play
++{
++    const char *problem = host_disc_check(self.disc.fileSystemRepresentation);
++    if (problem) {
++        [self alert:@"Original disc required"
++            message:[NSString stringWithFormat:@"%s\n\nPut SCUS-97177.iso in Files → On My iPhone → Downhill Revived, then tap Check ISO.", problem]];
++        return;
++    }
++    [self refreshControllers];
++    NSString *selection = [self value:@"ios_gamepad" fallback:@"auto"];
++    chosen_gamepad = 0;
++    for (NSDictionary *pad in self.pads)
++        if ([pad[@"key"] isEqualToString:selection]) chosen_gamepad = [pad[@"id"] unsignedIntValue];
++    if (![selection isEqualToString:@"auto"] && !chosen_gamepad) {
++        [self alert:@"Reconnect your gamepad" message:@"Connect the selected controller, or choose Auto in Controls."];
++        return;
++    }
++    if (!DHDEnabled([self value:@"touch_enabled" fallback:@"1"]) && !self.pads.count) {
++        [self alert:@"Choose your controls" message:@"Enable the virtual controller or connect a gamepad before playing."];
++        return;
++    }
++    self.values[@"iso"] = self.disc;
++    for (NSString *key in self.values) {
++        if (!dhd_settings_save(self.settingsPath.fileSystemRepresentation, key.UTF8String, self.values[key].UTF8String)) {
++            [self alert:@"Settings could not be saved" message:@"Check available storage, then tap Play again."];
++            return;
++        }
++    }
++    setenv("DHD_TOUCH_ENABLED", DHDEnabled(self.values[@"touch_enabled"]) ? "1" : "0", 1);
++    [self.controllerTimer invalidate];
++    self.wantsPlay = YES;
++}
++@end
++
++bool dhd_ios_prelaunch(const char *disc, const char *settings)
++{
++    @autoreleasepool {
++        UIWindowScene *scene = nil;
++        for (UIScene *candidate in UIApplication.sharedApplication.connectedScenes) {
++            if ([candidate isKindOfClass:UIWindowScene.class] &&
++                candidate.activationState != UISceneActivationStateUnattached &&
++                candidate.activationState != UISceneActivationStateBackground) {
++                scene = (UIWindowScene *)candidate;
++                break;
++            }
++        }
++        if (!scene) {
++            fprintf(stderr, "ios: no active scene for the prelaunch screen\n");
++            return false;
++        }
++        UIWindow *previous = nil;
++        for (UIWindow *candidate in scene.windows) if (candidate.isKeyWindow) previous = candidate;
++        gamepads_started = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
++        DHDLauncher *controller = [[DHDLauncher alloc] init];
++        controller.disc = [NSString stringWithUTF8String:disc];
++        controller.settingsPath = [NSString stringWithUTF8String:settings];
++        UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
++        window.windowLevel = UIWindowLevelNormal + 1;
++        window.rootViewController = controller;
++        [window makeKeyAndVisible];
++        while (!controller.wantsPlay) {
++            @autoreleasepool {
++                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.016]];
++            }
++        }
++        window.hidden = YES;
++        window.rootViewController = nil;
++        [previous makeKeyWindow];
++        return true;
++    }
++}
+diff --git a/port/ios/main.m b/port/ios/main.m
+index 4d4eb9a..fc251bb 100644
+--- a/port/ios/main.m
++++ b/port/ios/main.m
+@@ -7,9 +7,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include "../render/include/dhd_settings.h"
++#include "launcher.h"
+ 
+ int dhd_launcher_main(int argc, char **argv);
+-const char *host_disc_check(const char *path);
+ 
+ static char writable_executable_path[PATH_MAX];
+ 
+@@ -18,36 +18,6 @@ const char *ios_exe_path(void)
+     return writable_executable_path;
+ }
+ 
+-static BOOL wait_for_disc(NSString *disc)
+-{
+-    const char *problem = host_disc_check(disc.fileSystemRepresentation);
+-    if (!problem) return YES;
+-    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+-        fprintf(stderr, "ios: could not start SDL video: %s\n", SDL_GetError());
+-        return NO;
+-    }
+-    SDL_Window *window = SDL_CreateWindow("Downhill Revived", 640, 360, SDL_WINDOW_FULLSCREEN);
+-    if (!window) {
+-        fprintf(stderr, "ios: could not open the setup window: %s\n", SDL_GetError());
+-        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+-        return NO;
+-    }
+-    while (problem) {
+-        NSString *message = [NSString stringWithFormat:
+-            @"%s\n\nCopy your Downhill Domination USA ISO to Files → On My iPhone → Downhill Revived. "
+-             "Name it SCUS-97177.iso, then return here and tap Check Again.", problem];
+-        const SDL_MessageBoxButtonData button = {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Check Again"};
+-        const SDL_MessageBoxData box = {
+-            SDL_MESSAGEBOX_INFORMATION, window, "Downhill Revived", message.UTF8String, 1, &button, NULL
+-        };
+-        if (!SDL_ShowMessageBox(&box, NULL)) break;
+-        problem = host_disc_check(disc.fileSystemRepresentation);
+-    }
+-    SDL_DestroyWindow(window);
+-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+-    return problem == NULL;
+-}
+-
+ int main(int argc, char **argv)
+ {
+     @autoreleasepool {
+@@ -70,13 +40,14 @@ int main(int argc, char **argv)
+             [@"Copy your original Downhill Domination USA ISO here as SCUS-97177.iso."
+                  writeToFile:guide atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+         }
+-        if (!wait_for_disc(disc)) return 1;
+-        if (!dhd_settings_save(settings.fileSystemRepresentation, "iso", disc.fileSystemRepresentation)) return 1;
++        if (!dhd_ios_prelaunch(disc.fileSystemRepresentation, settings.fileSystemRepresentation)) return 1;
+         setenv("TMPDIR", NSTemporaryDirectory().fileSystemRepresentation, 1);
+         setenv("DHD_LAUNCHER", "1", 1);
+         setenv("DHD_SETTINGS", settings.fileSystemRepresentation, 1);
+         setenv("DHD_DATA_DIR", support.fileSystemRepresentation, 1);
+         setenv("DHD_MEMCARD_DIR", support.fileSystemRepresentation, 1);
+-        return dhd_launcher_main(argc, argv);
++        int result = dhd_launcher_main(argc, argv);
++        dhd_ios_launcher_finish();
++        return result;
+     }
+ }
+diff --git a/port/render/settings/src/table.rs b/port/render/settings/src/table.rs
+index 32d8f7b..077731c 100644
+--- a/port/render/settings/src/table.rs
++++ b/port/render/settings/src/table.rs
+@@ -124,7 +124,7 @@ pub const SETTINGS: &[Setting] = &[
+     switch("lens_flare", "DHD_LENS_FLARE", SWITCH, "1", "1"),
+     switch("particles", "DHD_PARTICLES", SWITCH, "1", "1"),
+     // Simulation steps a second (findings 067, 114), offline and online.
+-    choice("fps", "DHD_FPS", &[c("60", "60 fps"), c("120", "120 fps"), c("144", "144 fps"), c("165", "165 fps"),
++    choice("fps", "DHD_FPS", &[c("30", "30 fps"), c("60", "60 fps"), c("120", "120 fps"), c("144", "144 fps"), c("165", "165 fps"),
+                                c("240", "240 fps"), c("monitor", "Monitor")], "60", "60"),
+     switch("vsync", "DHD_VSYNC", SWITCH, "1", "0"),
+     switch("perf_counter", "DHD_PERF_COUNTER", SWITCH, "0", "0"),
+@@ -135,6 +135,8 @@ pub const SETTINGS: &[Setting] = &[
+     // and its range, the trick stick's size, the trick labels, the attacks (flick off PEDAL or
+     // buttons), vibration, whether a controller hides the overlay, tilt's strength and centre (degrees),
+     // the hints already shown (a number) and the layout editor's changes.
++    switch("touch_enabled", "DHD_TOUCH_ENABLED", SWITCH, "1", "1"),
++    text("ios_gamepad", "DHD_IOS_GAMEPAD"),
+     choice("touch_preset", "DHD_TOUCH_PRESET", &[c("thumb", "Thumb zones"), c("classic", "Classic pad")], "classic", "classic"),  // the full pad by default
+     choice("touch_hand", "DHD_TOUCH_HAND", &[c("right", "Right"), c("left", "Left")], "right", "right"),
+     choice("touch_steer", "DHD_TOUCH_STEER", &[c("stick", "Stick"), c("tilt", "Tilt")], "stick", "stick"),
+diff --git a/port/tools/build_host64.py b/port/tools/build_host64.py
+index eb4e692..a30ec06 100644
+--- a/port/tools/build_host64.py
++++ b/port/tools/build_host64.py
+@@ -115,7 +115,7 @@ ANDROID_EXPORTS = '{\n  global: SDL_main;\n  local: *;\n};\n'
+ def host_units(t):
+     if t.windows:
+         return list(HOST_UNITS)
+-    platform_units = ANDROID_UNITS if t.android else ['port/ios/main.m'] if t.ios else []
++    platform_units = ANDROID_UNITS if t.android else ['port/ios/main.m', 'port/ios/launcher.m'] if t.ios else []
+     return [POSIX_UNITS.get(u, u) for u in HOST_UNITS if u not in WINDOWS_ONLY] + platform_units
+ 
+ 
+@@ -461,8 +461,8 @@ def main():
+                 extra += ['-I'+str(ROOT/'port/render/include')]  # dhd_render.h
+             if rel.endswith('host64/launcher.c') and (t.android or t.ios):
+                 extra += ['-Dmain=dhd_launcher_main']  # The mobile SDL entry calls it
+-            if rel == 'port/ios/main.m':
+-                extra += ['-fobjc-arc']
++            if rel.startswith('port/ios/') and rel.endswith('.m'):
++                extra += ['-fobjc-arc', '-fblocks']
+             if 'libmpeg2/' in rel:
+                 extra += ['-I'+str(ROOT/'port/third_party/libmpeg2')]
+             obj = objdir/(rel.replace('/', '_') + suffix)
+@@ -555,7 +555,9 @@ def main():
+         elif t.ios:
+             run([cc, *t.flags, '-Wl,-dead_strip', '-Wl,-ObjC', '-Wl,-S', *objects,
+                  library, report['lib'], sdl_lib, *sdl_libs, *rust_libs,
+-                 '-framework', 'Foundation', '-framework', 'UIKit', '-o', exe], timeout=900)
++                 '-framework', 'Foundation', '-framework', 'UIKit', '-framework', 'QuartzCore',
++                 '-framework', 'CoreGraphics',
++                 '-o', exe], timeout=900)
+         elif t.mac:
+             # ld64: -dead_strip as --gc-sections; no -rdynamic (exporting every symbol keeps the
+             # module-side code of fps.c alive, which names guest data the host does not have); -S: no

@@ -1,0 +1,16 @@
+diff --git a/simde/simde-f16.h b/simde/simde-f16.h
+index 77a220a..bc83c2b 100644
+--- a/simde/simde-f16.h
++++ b/simde/simde-f16.h
+@@ -66,7 +66,10 @@ SIMDE_BEGIN_DECLS_
+  * any ideas on how to improve it.  If you do, patches are definitely
+  * welcome. */
+ #if !defined(SIMDE_FLOAT16_API)
+-  #if defined(__ARM_FP16_FORMAT_IEEE) && (defined(SIMDE_ARM_NEON_FP16) || defined(__ARM_FP16_ARGS))
++  #if defined(__wasm__) && defined(__wasi__) && !defined(__wasm_fp16__)
++    /* The WASI target needs the portable half type unless FP16 is enabled. */
++    #define SIMDE_FLOAT16_API SIMDE_FLOAT16_API_PORTABLE
++  #elif defined(__ARM_FP16_FORMAT_IEEE) && (defined(SIMDE_ARM_NEON_FP16) || defined(__ARM_FP16_ARGS))
+     #define SIMDE_FLOAT16_API SIMDE_FLOAT16_API_FP16
+   #elif !defined(__EMSCRIPTEN__) && !(defined(__clang__) && defined(SIMDE_ARCH_POWER)) && \
+     !(defined(HEDLEY_MSVC_VERSION) && defined(__clang__)) && \

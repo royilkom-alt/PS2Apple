@@ -1,0 +1,169 @@
+diff --git a/port/ios/launcher.m b/port/ios/launcher.m
+--- a/port/ios/launcher.m
++++ b/port/ios/launcher.m
+@@ -5,6 +5,7 @@
+ #include <stdio.h>
+ #include "launcher.h"
+ #import "shared/PS2AppleUI.h"
++#import "shared/PS2LauncherHome.h"
+ #include "../render/include/dhd_settings.h"
+ 
+ __attribute__((used)) const char ps2apple_downhill_frontend[] = "PS2AppleDownhillUI-v1";
+@@ -17,7 +18,7 @@
+ static BOOL DHDTouchLayoutKey(NSString *key)
+ {
+     return [key hasPrefix:@"touch_layout."] || [key isEqualToString:@"touch_analog_size"] ||
+-        [key isEqualToString:@"touch_auto_hide"];
++        [key isEqualToString:@"touch_auto_hide"] || [key isEqualToString:@"touch_preset"];
+ }
+ 
+ SDL_JoystickID dhd_ios_selected_gamepad(void) { return chosen_gamepad; }
+@@ -69,7 +70,6 @@
+ @property(nonatomic, copy) NSString *menuSelection;
+ @property(nonatomic, strong) UIView *catalogView;
+ @property(nonatomic, strong) UIView *settingsView;
+-@property(nonatomic, strong) NSLayoutConstraint *coverSize;
+ @property(nonatomic) BOOL wantsPlay;
+ @end
+ 
+@@ -105,106 +105,15 @@
+         @"touch_stick":@"floating", @"touch_analog_size":@"large", @"touch_with_pad":@"hide", @"touch_auto_hide":@"1"};
+     for (NSString *key in touchDefaults) [self value:key fallback:touchDefaults[key]];
+     self.pads = @[];
+-    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+-    UIView *catalog = [[UIView alloc] init];
+-    self.catalogView = catalog;
+-    catalog.translatesAutoresizingMaskIntoConstraints = NO;
+-    [self.view addSubview:catalog];
+-    [NSLayoutConstraint activateConstraints:@[
+-        [catalog.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:24],
+-        [catalog.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-24],
+-        [catalog.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+-        [catalog.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-8],
+-    ]];
+-
+-    UILabel *heading = DHDLabel(@"Library", 25, UIFontWeightBold);
+-    heading.translatesAutoresizingMaskIntoConstraints = NO;
+-    [catalog addSubview:heading];
+-    UIButtonConfiguration *gearConfig = [UIButtonConfiguration plainButtonConfiguration];
+-    gearConfig.image = [UIImage systemImageNamed:@"gearshape"];
+-    gearConfig.title = @"Settings";
+-    gearConfig.imagePadding = 8;
+-    gearConfig.baseForegroundColor = DHDColor(0xD5D8DC, 1);
+-    UIButton *gear = [UIButton buttonWithConfiguration:gearConfig primaryAction:nil];
+-    gear.translatesAutoresizingMaskIntoConstraints = NO;
+-    [gear addTarget:self action:@selector(showSettings) forControlEvents:UIControlEventTouchUpInside];
+-    [catalog addSubview:gear];
+-
+-    UIView *card = [[UIView alloc] init];
+-    card.backgroundColor = DHDColor(0x202226, 1);
+-    card.layer.cornerRadius = 13;
+-    card.layer.borderWidth = 2;
+-    card.layer.borderColor = DHDColor(0x59D1D9, 1).CGColor;
+-    card.translatesAutoresizingMaskIntoConstraints = NO;
+-    card.isAccessibilityElement = YES;
+-    card.accessibilityLabel = @"Downhill Domination, selected game";
+-    [catalog addSubview:card];
+-    UIImage *art = [UIImage imageNamed:@"GameIcon.png"];
+-    UIImageView *cover = [[UIImageView alloc] initWithImage:art ?: [UIImage systemImageNamed:@"gamecontroller.fill"]];
+-    cover.contentMode = UIViewContentModeScaleAspectFill;
+-    cover.backgroundColor = DHDColor(0x30343A, 1);
+-    cover.tintColor = DHDColor(0xA9B1BC, 1);
+-    cover.layer.cornerRadius = 8;
+-    cover.clipsToBounds = YES;
+-    cover.translatesAutoresizingMaskIntoConstraints = NO;
+-    [card addSubview:cover];
+-    self.coverSize = [cover.heightAnchor constraintEqualToConstant:160];
+-    self.coverSize.active = YES;
+-    UILabel *cardTitle = DHDLabel(@"Downhill Domination", 12, UIFontWeightSemibold);
+-    cardTitle.translatesAutoresizingMaskIntoConstraints = NO;
+-    cardTitle.numberOfLines = 2;
+-    [card addSubview:cardTitle];
+-
+-    UILabel *title = DHDLabel(@"Downhill Domination", 19, UIFontWeightSemibold);
+     self.discPicker = [[PS2DiscPicker alloc] init];
+     self.discStatus = DHDLabel(self.discPicker.hasSavedDisc ? @"ISO selected" : @"Choose an ISO to play",
+-                              11, UIFontWeightRegular);
+-    self.discStatus.textColor = DHDColor(0x8BD9CE, 1);
+-    self.summary = DHDLabel(@"", 10, UIFontWeightRegular);
+-    self.summary.textColor = DHDColor(0x9CA5AE, 1);
+-    UIStackView *details = [[UIStackView alloc] initWithArrangedSubviews:@[title, self.discStatus, self.summary]];
+-    details.axis = UILayoutConstraintAxisVertical;
+-    details.spacing = 3;
+-    details.translatesAutoresizingMaskIntoConstraints = NO;
+-    [catalog addSubview:details];
+-    UIButtonConfiguration *playConfig = [UIButtonConfiguration filledButtonConfiguration];
+-    playConfig.title = @"Play";
+-    playConfig.image = [UIImage systemImageNamed:@"play.fill"];
+-    playConfig.imagePadding = 10;
+-    playConfig.baseBackgroundColor = DHDColor(0xE8F8F8, 1);
+-    playConfig.baseForegroundColor = DHDColor(0x101C1D, 1);
+-    playConfig.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+-    self.playButton = [UIButton buttonWithConfiguration:playConfig primaryAction:nil];
+-    self.playButton.accessibilityLabel = @"Play Downhill Domination";
+-    self.playButton.translatesAutoresizingMaskIntoConstraints = NO;
++                              12, UIFontWeightMedium);
++    self.summary = DHDLabel(@"", 11, UIFontWeightRegular);
++    self.playButton = [UIButton buttonWithType:UIButtonTypeSystem];
+     [self.playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventTouchUpInside];
+-    [catalog addSubview:self.playButton];
+-    [NSLayoutConstraint activateConstraints:@[
+-        [heading.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
+-        [heading.topAnchor constraintEqualToAnchor:catalog.topAnchor],
+-        [heading.heightAnchor constraintEqualToConstant:38],
+-        [gear.trailingAnchor constraintEqualToAnchor:catalog.trailingAnchor],
+-        [gear.centerYAnchor constraintEqualToAnchor:heading.centerYAnchor],
+-        [gear.heightAnchor constraintGreaterThanOrEqualToConstant:44],
+-        [card.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
+-        [card.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:12],
+-        [cover.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:8],
+-        [cover.topAnchor constraintEqualToAnchor:card.topAnchor constant:8],
+-        [cover.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-8],
+-        [cover.widthAnchor constraintEqualToAnchor:cover.heightAnchor],
+-        [cardTitle.leadingAnchor constraintEqualToAnchor:cover.leadingAnchor constant:2],
+-        [cardTitle.trailingAnchor constraintEqualToAnchor:cover.trailingAnchor constant:-2],
+-        [cardTitle.topAnchor constraintEqualToAnchor:cover.bottomAnchor constant:5],
+-        [cardTitle.heightAnchor constraintEqualToConstant:30],
+-        [cardTitle.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-7],
+-        [details.leadingAnchor constraintEqualToAnchor:catalog.leadingAnchor],
+-        [details.trailingAnchor constraintLessThanOrEqualToAnchor:self.playButton.leadingAnchor constant:-20],
+-        [details.centerYAnchor constraintEqualToAnchor:self.playButton.centerYAnchor],
+-        [self.playButton.trailingAnchor constraintEqualToAnchor:catalog.trailingAnchor],
+-        [self.playButton.bottomAnchor constraintEqualToAnchor:catalog.bottomAnchor],
+-        [self.playButton.widthAnchor constraintEqualToConstant:150],
+-        [self.playButton.heightAnchor constraintEqualToConstant:52],
+-    ]];
++    UIImage *art = [UIImage imageNamed:@"GameIcon.png"];
++    self.catalogView = PS2MakeLauncherHome(self, @"Downhill Domination", @"SCUS-97177", art,
++                                           self.discStatus, self.summary, self.playButton, @selector(showSettings));
+     [self makeSettingsPage];
+     [self value:@"ios_gamepad" fallback:@"auto"];
+     [self value:@"touch_enabled" fallback:@"1"];
+@@ -218,14 +127,6 @@
+     [[NSRunLoop mainRunLoop] addTimer:self.controllerTimer forMode:NSRunLoopCommonModes];
+ }
+ 
+-- (void)viewDidLayoutSubviews
+-{
+-    [super viewDidLayoutSubviews];
+-    CGFloat height = self.view.safeAreaLayoutGuide.layoutFrame.size.height;
+-    CGFloat side = MAX(90, MIN(220, height - 194));
+-    if (self.coverSize.constant != side) self.coverSize.constant = side;
+-}
+-
+ - (void)makeSettingsPage
+ {
+     UIView *page = [[UIView alloc] init];
+@@ -408,10 +309,10 @@
+         [self toggle:@"Virtual controller" key:@"touch_enabled" fallback:@"1"];
+         [self toggle:@"Hide after 4s idle" key:@"touch_auto_hide" fallback:@"1"];
+         UIButton *edit = [UIButton buttonWithType:UIButtonTypeSystem];
+-        [edit setTitle:@"Edit Layout" forState:UIControlStateNormal];
++        [edit setTitle:@"Customize…" forState:UIControlStateNormal];
+         [edit.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+         [edit addTarget:self action:@selector(editTouchLayout) forControlEvents:UIControlEventTouchUpInside];
+-        [self row:@"Touch positions" control:edit];
++        [self row:@"Touch layout" control:edit];
+         [self choice:@"Button size" key:@"touch_size" values:@[@"auto", @"70", @"85", @"100", @"105"]
+               labels:@[@"Auto", @"70%", @"85%", @"100%", @"105%"] fallback:@"auto"];
+         [self choice:@"Button opacity" key:@"touch_opacity" values:@[@"25", @"40", @"60", @"80", @"100"]

@@ -1,0 +1,342 @@
+diff --git a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+--- a/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
++++ b/ps2xRuntime/include/runtime/gs/gs_cpu_backend.h
+@@ -41,7 +41,7 @@
+     void DrawSprite(const GSPrimitiveBatch &batch);
+     void DrawTriangle(const GSPrimitiveBatch &batch);
+     void DrawLine(const GSPrimitiveBatch &batch);
+-    void WritePixel(const GSDrawState &state, int x, int y, uint32_t z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog);
++    void WritePixel(const GSDrawState &state, int x, int y, uint32_t z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog, bool depthPassed = false);
+     uint32_t SampleTexture(const GSDrawState &state, float s, float t, float q, uint16_t u, uint16_t v);
+     uint32_t LookupCLUT(const GSDrawState &state, uint8_t index, uint32_t cbp, uint8_t cpsm, uint8_t csm, uint8_t csa, uint8_t sourcePsm);
+ 
+diff --git a/ps2xRuntime/include/runtime/gs/gs_field_weaver.h b/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
+--- a/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
++++ b/ps2xRuntime/include/runtime/gs/gs_field_weaver.h
+@@ -1,29 +1,42 @@
+ #pragma once
+ #include "runtime/gs/gs_types.h"
+-#include <algorithm>
+ #include <cstring>
+ 
+ // A field may be woven only with its consecutive neighbour and matching display geometry.
+ class GSFieldWeaver {
+     PresentationFrame history;
+     GSPresentationRequest previous{};
++    uint64_t lastPairTick = 0;
+ public:
+-    void reset() { history = {}; previous = {}; }
+-    void apply(PresentationFrame &frame, const GSPresentationRequest &request) {
+-        if (!(request.smode2 & 1u) || !frame) { reset(); return; }
++    void reset() { history = {}; previous = {}; lastPairTick = 0; }
++    bool apply(PresentationFrame &frame, const GSPresentationRequest &request, bool holdIncomplete = false) {
++        if (!(request.smode2 & 1u) || !frame) { reset(); return true; }
+         constexpr uint64_t geometryMask = ~0x1ffull; // FBP can alternate on each field.
+-        bool matching = history && history.width == frame.width && history.height == frame.height &&
+-            previous.vsyncTick + 1 == request.vsyncTick && previous.pmode == request.pmode &&
+-            previous.smode2 == request.smode2 && previous.display1 == request.display1 &&
+-            previous.display2 == request.display2 &&
++        const bool sameGeometry = history && history.width == frame.width && history.height == frame.height &&
++            previous.pmode == request.pmode && previous.smode2 == request.smode2 &&
++            previous.display1 == request.display1 && previous.display2 == request.display2 &&
+             ((previous.dispfb1 ^ request.dispfb1) & geometryMask) == 0 &&
+             ((previous.dispfb2 ^ request.dispfb2) & geometryMask) == 0;
++        const bool adjacent = sameGeometry && previous.vsyncTick + 1 == request.vsyncTick;
+         previous = request;
+-        if (!matching) { history = frame; return; }
++        if (!adjacent) {
++            if (!sameGeometry) lastPairTick = 0;
++            history = frame;
++            // Hold the last woven picture across a short gap. A sustained gap can still show a single field.
++            return !holdIncomplete || !lastPairTick || request.vsyncTick <= lastPairTick ||
++                   request.vsyncTick - lastPairTick > 3;
++        }
+         const unsigned parity = unsigned(request.vsyncTick & 1u);
+-        for (unsigned y = parity; y < frame.height; y += 2u)
+-            std::memcpy(history.pixels.data() + y * 640u * 4u,
+-                        frame.pixels.data() + y * 640u * 4u, frame.width * 4u);
+-        frame.pixels = history.pixels;
++        for (unsigned y = 0; y < frame.height; ++y) {
++            const size_t row = y * 640u * 4u;
++            uint8_t *current = frame.pixels.data() + row;
++            uint8_t *prior = history.pixels.data() + row;
++            if ((y & 1u) == parity)
++                std::memcpy(prior, current, frame.width * 4u);
++            else
++                std::memcpy(current, prior, frame.width * 4u);
++        }
++        lastPairTick = request.vsyncTick;
++        return true;
+     }
+ };
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -902,7 +902,7 @@
+     }
+ }
+ 
+-void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, uint32_t z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
++void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, uint32_t z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog, bool depthPassed)
+ {
+     const auto &ctx = state.context;
+     if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
+@@ -966,24 +966,11 @@
+         return;
+     }
+ 
+-    bool zpass = false;
+-    uint32_t storedZ = 0u;
+-    switch (ztestMethod)
+-    {
+-    case 0:
+-        zpass = false;
+-        break;
+-    case 1:
+-        zpass = true;
+-        break;
+-    case 2:
+-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
+-        zpass = static_cast<uint32_t>(z) >= storedZ;
+-        break;
+-    case 3:
+-        storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
+-        zpass = static_cast<uint32_t>(z) > storedZ;
+-        break;
++    bool zpass = depthPassed || ztestMethod == 1u;
++    if (!zpass && ztestMethod >= 2u)
++    {
++        const uint32_t storedZ = ReadVramUnlocked(zpsm, zbp, fbw, x, y);
++        zpass = ztestMethod == 2u ? z >= storedZ : z > storedZ;
+     }
+ 
+     const bool diagnosticPixel = ((x == 128 && y == 64) || (x == 320 && y == 112));
+@@ -1431,6 +1418,11 @@
+     const float winding = (denom < 0.0f) ? -1.0f : 1.0f;
+     const float invAbsDenom = 1.0f / std::fabs(denom);
+     constexpr float kEdgeEpsilon = 1.0e-4f;
++    static const bool capturePixels = std::getenv("PS2_INSPECTOR_PIXELS") != nullptr;
++    const unsigned ztest = (ctx.test >> 17u) & 3u;
++    const bool earlyDepth = state.prim.tme && ztest >= 2u && !capturePixels;
++    const uint32_t zbp = GSInternal::framePageBaseToBlock(ctx.zbuf.zbp);
++    const uint32_t fbw = std::max<uint32_t>(ctx.frame.fbw, 1u);
+ 
+     for (int y = minY; y <= maxY; ++y)
+     {
+@@ -1446,7 +1438,14 @@
+             if (w0 < -kEdgeEpsilon || w1 < -kEdgeEpsilon || w2 < -kEdgeEpsilon)
+                 continue;
+ 
+-            double z = v0.z * w0 + v1.z * w1 + v2.z * w2;
++            const double z = v0.z * w0 + v1.z * w1 + v2.z * w2;
++            const uint32_t depth = static_cast<uint32_t>(std::clamp(z + 0.5, 0.0, 4294967295.0));
++            if (earlyDepth)
++            {
++                const uint32_t storedZ = ReadVramUnlocked(ctx.zbuf.psm, zbp, fbw, x, y);
++                if (ztest == 2u ? depth < storedZ : depth <= storedZ)
++                    continue;
++            }
+ 
+             uint8_t r, g, b, a;
+             if (state.prim.iip)
+@@ -1509,7 +1508,7 @@
+             }
+ 
+             const uint8_t fog = clampU8(static_cast<int>(v0.fog * w0 + v1.fog * w1 + v2.fog * w2));
+-            WritePixel(state, x, y, static_cast<uint32_t>(std::clamp(z + 0.5, 0.0, 4294967295.0)), r, g, b, a, fog);
++            WritePixel(state, x, y, depth, r, g, b, a, fog, earlyDepth);
+         }
+     }
+ }
+@@ -1904,6 +1903,20 @@
+     const uint32_t baseBytes = frameBaseIsPages ? frame.fbp * 8192u : frame.fbp * 256u;
+     const uint32_t basePtr = frameBaseIsPages ? GSInternal::framePageBaseToBlock(frame.fbp) : frame.fbp;
+     const uint32_t fbw = frame.fbw ? frame.fbw : kHostFrameWidth / 64u;
++    if (useLocalMemoryLayout && (frame.psm == GS_PSM_CT32 || frame.psm == GS_PSM_CT24))
++    {
++        const uint32_t alpha = preserveAlpha && frame.psm == GS_PSM_CT32 ? 0u : 0xff000000u;
++        for (uint32_t y = 0; y < height; ++y)
++        {
++            uint8_t *row = outPixels.data() + y * kHostFrameWidth * 4u;
++            for (uint32_t x = 0; x < width; ++x)
++            {
++                const uint32_t rgba = GSMem::ReadCT32(m_vram, basePtr, fbw, sourceOriginX + x, sourceOriginY + y) | alpha;
++                std::memcpy(row + x * 4u, &rgba, sizeof(rgba));
++            }
++        }
++        return true;
++    }
+     const uint32_t bytesPerPixel = (frame.psm == GS_PSM_CT16 || frame.psm == GS_PSM_CT16S) ? 2u : 4u;
+     const uint32_t stride = fbw * 64u * bytesPerPixel;
+ 
+@@ -1917,19 +1930,14 @@
+             if (frame.psm == GS_PSM_CT32 || frame.psm == GS_PSM_CT24)
+             {
+                 uint32_t color = 0u;
+-                if (useLocalMemoryLayout)
+-                    color = ReadVramUnlocked(frame.psm, basePtr, fbw, sx, sy);
+-                else
+-                {
+-                    const uint32_t pixelBytes = frame.psm == GS_PSM_CT24 ? 3u : 4u;
+-                    const uint64_t offset = static_cast<uint64_t>(baseBytes) + static_cast<uint64_t>(sy) * stride + static_cast<uint64_t>(sx) * pixelBytes;
+-                    if (offset + pixelBytes > m_vramSize)
+-                        return false;
+-                    color = m_vram[offset] | (static_cast<uint32_t>(m_vram[offset + 1u]) << 8u) |
+-                            (static_cast<uint32_t>(m_vram[offset + 2u]) << 16u);
+-                    if (pixelBytes == 4u)
+-                        color |= static_cast<uint32_t>(m_vram[offset + 3u]) << 24u;
+-                }
++                const uint32_t pixelBytes = frame.psm == GS_PSM_CT24 ? 3u : 4u;
++                const uint64_t offset = static_cast<uint64_t>(baseBytes) + static_cast<uint64_t>(sy) * stride + static_cast<uint64_t>(sx) * pixelBytes;
++                if (offset + pixelBytes > m_vramSize)
++                    return false;
++                color = m_vram[offset] | (static_cast<uint32_t>(m_vram[offset + 1u]) << 8u) |
++                        (static_cast<uint32_t>(m_vram[offset + 2u]) << 16u);
++                if (pixelBytes == 4u)
++                    color |= static_cast<uint32_t>(m_vram[offset + 3u]) << 24u;
+                 dst[x * 4u] = static_cast<uint8_t>(color);
+                 dst[x * 4u + 1u] = static_cast<uint8_t>(color >> 8u);
+                 dst[x * 4u + 2u] = static_cast<uint8_t>(color >> 16u);
+@@ -2064,7 +2072,12 @@
+         return true;
+     };
+ 
+-    if (valid1 && valid2)
++    // Mixing identical images against one another leaves the RGB channels unchanged.
++    const bool supportedColor = displayFrame1.psm == GS_PSM_CT32 || displayFrame1.psm == GS_PSM_CT24 ||
++        displayFrame1.psm == GS_PSM_CT16 || displayFrame1.psm == GS_PSM_CT16S;
++    const bool identicalCircuits = valid1 && valid2 && !pmode.slbg && supportedColor &&
++        request.dispfb1 == request.dispfb2 && request.display1 == request.display2;
++    if (valid1 && valid2 && !identicalCircuits)
+     {
+         GSFrameReg selected1{}, selected2{};
+         std::vector<uint8_t> crt1, crt2;
+@@ -2115,11 +2128,12 @@
+     result.width = valid1 ? width1 : width2;
+     result.height = valid1 ? height1 : height2;
+     GSFrameReg selected = displayFrame;
+-    if (!copySource(displayFrame, origin, result.width, result.height, true, false, selected, result.pixels, result.usedPreferred))
++    if (!copySource(displayFrame, origin, result.width, result.height, !identicalCircuits, false,
++                    selected, result.pixels, result.usedPreferred))
+         return {};
+     if (fieldMode)
+         applyFieldPresentation(result.pixels, result.width, result.height, oddField, request.interpolateFields);
+-    normalizePresentationAlpha(result.pixels, result.width, result.height);
++    // copySource has already made the single output opaque.
+     result.displayFbp = displayFrame.fbp;
+     result.sourceFbp = selected.fbp;
+     return result;
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -644,10 +644,11 @@
+             // Copy VRAM while the display registers and draw context belong to the same snapshot.
+             m_backend->SnapshotVram(snapshot);
+         }
+-        capturedTick = request.vsyncTick;
+-    }
++    }
++    const uint64_t sampleTick = request.vsyncTick;
+     if (!(request.pmode & 3u))
+     {
++        capturedTick = sampleTick;
+         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+         m_fieldWeaver.reset();
+         return PresentationFrame{}; // Both display outputs are explicitly disabled.
+@@ -660,10 +661,12 @@
+     PresentationFrame frame = GSCpuBackend::PresentSnapshot(request, snapshot);
+     if (!frame)
+         return std::nullopt;
++    capturedTick = sampleTick;
+     if (weave)
+     {
+         std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
+-        m_fieldWeaver.apply(frame, request);
++        if (!m_fieldWeaver.apply(frame, request, true))
++            return std::nullopt;
+     }
+     return frame;
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -433,34 +433,57 @@
+ {
+     static uint64_t lastTick = std::numeric_limits<uint64_t>::max();
+     static uint32_t lastWidth = FB_WIDTH, lastHeight = DEFAULT_DISPLAY_HEIGHT;
++    static std::optional<PresentationFrame> pending;
++    static const auto options = PS2HostScanoutOptions();
++    static uint64_t samples = 0, retries = 0, uploads = 0;
+     width = lastWidth;
+     height = lastHeight;
+     auto &memory = rt->memory();
+     const uint64_t tick = memory.gs().vsyncTick.load(std::memory_order_acquire);
+-    if (tick == lastTick)
++    if (tick != lastTick)
++    {
++        constexpr uint64_t notCaptured = std::numeric_limits<uint64_t>::max();
++        uint64_t capturedTick = notCaptured;
++        auto frame = rt->gs().tryHostPresentationFrame(memory.gsAccessMutex(), capturedTick,
++                                                       options.useContextFallback, options.weave);
++        if (capturedTick != notCaptured)
++        {
++            lastTick = capturedTick;
++            ++samples;
++        }
++        else
++            ++retries;
++        if (frame)
++            pending = std::move(frame);
++    }
++    if (options.logTiming)
++    {
++        const double now = GetTime();
++        static double reportTime = now;
++        static uint64_t reportTick = tick;
++        if (now - reportTime >= 5.0)
++        {
++            std::cerr << "[scanout] seconds=" << now - reportTime << " guest_fields=" << tick - reportTick
++                      << " sampled=" << samples << " retries=" << retries << " uploads=" << uploads << '\n';
++            reportTime = now;
++            reportTick = tick;
++            samples = retries = uploads = 0;
++        }
++    }
++
++    // Keep the field history current even while the Metal output is rate-limited.
++    if (!pending || !PS2ScanoutDue())
+         return;
+-
+-    const auto options = PS2HostScanoutOptions();
+-    constexpr uint64_t notCaptured = std::numeric_limits<uint64_t>::max();
+-    uint64_t capturedTick = notCaptured;
+-    auto frame = rt->gs().tryHostPresentationFrame(memory.gsAccessMutex(), capturedTick,
+-                                                   options.useContextFallback, options.weave);
+-    if (!frame)
+-    {
+-        if (capturedTick == notCaptured)
+-            PS2RetryScanout();
+-        return; // Retain the last image until a complete scanout becomes available.
+-    }
+-
+-    lastTick = capturedTick;
+-    if (!*frame)
+-    {
++    if (*pending)
++    {
++        lastWidth = width = std::min<uint32_t>(pending->width, FB_WIDTH);
++        lastHeight = height = std::min<uint32_t>(pending->height, FB_HEIGHT);
++        PS2UploadFrame(texture, pending->pixels.data(), width, height, FB_WIDTH);
++        ++uploads;
++    }
++    else
+         PS2BlankFrame();
+-        return;
+-    }
+-    lastWidth = width = std::min<uint32_t>(frame->width, FB_WIDTH);
+-    lastHeight = height = std::min<uint32_t>(frame->height, FB_HEIGHT);
+-    PS2UploadFrame(texture, frame->pixels.data(), width, height, FB_WIDTH);
++    pending.reset();
+ }
+ #else
+ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)

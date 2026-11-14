@@ -1,0 +1,194 @@
+diff --git a/port/host64/guest_memory.c b/port/host64/guest_memory.c
+index 748b32c..fb39c36 100644
+--- a/port/host64/guest_memory.c
++++ b/port/host64/guest_memory.c
+@@ -1,4 +1,4 @@
+-/* Guest linear memory: one 8 GiB reservation with aliased RAM views. The
++/* Guest linear memory: one reservation with aliased RAM views. The
+    policy here (views, commit-on-demand, fault-on-uncommitted) is identical on
+    every host; the OS mapping lives in guest_memory_win32.c (Windows 10 1803+)
+    or guest_memory_posix.c (Linux and other POSIX hosts), behind
+@@ -9,8 +9,8 @@
+    hardware windows (host_mem_commit), the EE stack slots and the bridge arena
+    are committed by their owners. Everything else stays reserved, and an access
+    to it ends the process with the guest address (the OS fault reporter), never
+-   a silent zero. [4 GiB,8 GiB) stays inaccessible even if memory grows to
+-   wasm32's limit. */
++   a silent zero. The final region stays inaccessible. iOS uses explicit
++   wasm2c bounds checks and reserves the module's 2 GiB limit plus an end guard. */
+ #include <stdbool.h>
+ #include <stdint.h>
+ #include <stdio.h>
+@@ -20,11 +20,15 @@
+ #include "memory_layout.h"
+ #include "guest_memory_os.h"
+ 
++#if defined(DHD_IOS) && !WASM_RT_MEMCHECK_BOUNDS_CHECK
++#error iOS guest memory requires explicit wasm2c bounds checks
++#endif
++
+ uintptr_t guest_base;
+ static wasm_rt_memory_t *owner;
+ static const uint64_t edges[] = {0,0x00400000,0x02000000,0x08000000,0x0a000000,
+     0x20400000,0x22000000,0x28000000,0x2a000000,0x30400000,0x32000000,
+-    0x38000000,0x3a000000,0x100000000ull,0x200000000ull};
++    0x38000000,0x3a000000,HOST64_MEMORY_LIMIT,HOST64_RESERVATION_SIZE};
+ enum { REGIONS=sizeof edges/sizeof edges[0]-1 };
+ static int mirror(unsigned i) { return i==1 || i==3 || i==5 || i==7 || i==9 || i==11; }
+ static uint64_t section_offset(unsigned i) { return edges[i]&0x01ffffff; }
+@@ -50,10 +54,12 @@ int host64_memory_commit_stack(uint32_t sp) {
+ void wasm_rt_allocate_memory(wasm_rt_memory_t *m,uint64_t initial,uint64_t max,
+                              bool is64,uint32_t page_size) {
+     if (owner || is64 || page_size!=65536 || initial<HOST64_MIN_MEMORY_SIZE/65536 ||
+-        initial>max || max>65536 || initial*65536<=HOST64_MODULE_BASE)
++        initial>max || max>HOST64_MEMORY_LIMIT/65536 || initial*65536<=HOST64_MODULE_BASE)
+         os_fail("unsupported module memory layout");
++    fprintf(stderr,"host64 memory: reserving %llu bytes, maximum guest memory %llu bytes\n",
++            (unsigned long long)HOST64_RESERVATION_SIZE,(unsigned long long)HOST64_MEMORY_LIMIT);
+     guest_base=os_reserve();
+-    if (!guest_base) os_fail("reserve 8 GiB");
++    if (!guest_base) os_fail("reserve guest address space");
+     for (unsigned i=0;i<REGIONS-1;i++)
+         if (!os_split(guest_base+edges[i],edges[i+1]-edges[i])) os_fail("split reservation");
+     for (unsigned i=0;i<REGIONS-1;i++) {
+diff --git a/port/host64/guest_memory_os.h b/port/host64/guest_memory_os.h
+index ef89491..87563b1 100644
+--- a/port/host64/guest_memory_os.h
++++ b/port/host64/guest_memory_os.h
+@@ -6,7 +6,7 @@
+ #define DHD_HOST64_GUEST_MEMORY_OS_H
+ #include <stdint.h>
+ 
+-/* Reserves 8 GiB of inaccessible address space and readies the 32 MiB RAM
++/* Reserves HOST64_RESERVATION_SIZE of inaccessible space and readies the 32 MiB RAM
+    backing store. Returns the base, or 0 on failure. */
+ uintptr_t os_reserve(void);
+ /* Prepares [at, at + size) for mapping (Windows placeholders; no-op on POSIX).
+diff --git a/port/host64/guest_memory_posix.c b/port/host64/guest_memory_posix.c
+index 6f142fc..aa66fb3 100644
+--- a/port/host64/guest_memory_posix.c
++++ b/port/host64/guest_memory_posix.c
+@@ -18,8 +18,9 @@
+ #include <unistd.h>
+ #include "core_host.h"  /* guest_base, for the fault bounds check */
+ #include "guest_memory_os.h"
++#include "memory_layout.h"
+ 
+-#define GUEST_SIZE 0x200000000ull
++#define GUEST_SIZE HOST64_RESERVATION_SIZE
+ #define RAM_SIZE 0x2000000ull
+ 
+ static int ram_fd=-1;
+@@ -52,7 +53,7 @@ uintptr_t os_reserve(void) {
+ #endif
+     if (ram_fd<0) return 0;
+     if (ftruncate(ram_fd,RAM_SIZE)<0) { close(ram_fd); ram_fd=-1; return 0; }
+-    /* MAP_NORESERVE: the 8 GiB reservation must not charge swap; committed
++    /* MAP_NORESERVE: the address reservation must not charge swap; committed
+        pages are charged when mprotect commits them. */
+     void *p=mmap(NULL,GUEST_SIZE,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE,-1,0);
+     if (p==MAP_FAILED) { close(ram_fd); ram_fd=-1; return 0; }
+diff --git a/port/host64/launcher.c b/port/host64/launcher.c
+index 8242cd9..60ad50d 100644
+--- a/port/host64/launcher.c
++++ b/port/host64/launcher.c
+@@ -8,6 +8,10 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#ifdef DHD_IOS
++#include <fcntl.h>
++#include <limits.h>
++#endif
+ #include <exports_gen.h>
+ #include "bridge.h"
+ #include "core_host.h"
+@@ -83,9 +87,34 @@ static int game(void *start) {
+     return code;
+ }
+ int sdl_host_main(int (*game)(void *),void *arg);  /* port/host/sdl_host.c */
++#ifdef DHD_IOS
++static void ios_start_log(void)
++{
++    const char *home = getenv("HOME");
++    char path[PATH_MAX], previous[PATH_MAX];
++    if (!home) return;
++    int n = snprintf(path, sizeof path, "%s/Documents/dhd-startup.log", home);
++    int p = snprintf(previous, sizeof previous, "%s/Documents/dhd-startup-previous.log", home);
++    if (n < 0 || (size_t)n >= sizeof path || p < 0 || (size_t)p >= sizeof previous) return;
++    rename(path, previous);
++    int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0600);
++    if (fd < 0) return;
++    fflush(stdout);
++    fflush(stderr);
++    dup2(fd, STDERR_FILENO);
++    dup2(fd, STDOUT_FILENO);
++    if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
++    setvbuf(stdout, NULL, _IONBF, 0);
++    setvbuf(stderr, NULL, _IONBF, 0);
++    fprintf(stderr, "ios: starting native host with explicit guest memory bounds\n");
++}
++#endif
+ int main(int argc,char **argv) {
+ #ifdef _WIN32
+     SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
++#endif
++#ifdef DHD_IOS
++    ios_start_log();
+ #endif
+     Args args={argc,argv};
+ #ifdef HOST64_FAKE_MODULE
+diff --git a/port/host64/memory_layout.h b/port/host64/memory_layout.h
+index c1a600d..62f56d6 100644
+--- a/port/host64/memory_layout.h
++++ b/port/host64/memory_layout.h
+@@ -17,4 +17,13 @@
+    null page, each EE stack slot's lowest page) are this size, so what is committed and what
+    faults is the same on every platform. */
+ #define HOST64_PAGE 0x4000u
++/* The iOS module's maximum memory is 2 GiB. Its wasm2c accesses use explicit
++   bounds checks, so it needs that range and one inaccessible end guard. */
++#ifdef DHD_IOS
++#define HOST64_MEMORY_LIMIT 0x80000000ull
++#define HOST64_RESERVATION_SIZE (HOST64_MEMORY_LIMIT + HOST64_PAGE)
++#else
++#define HOST64_MEMORY_LIMIT 0x100000000ull
++#define HOST64_RESERVATION_SIZE 0x200000000ull
++#endif
+ #endif
+diff --git a/port/tools/build_host64.py b/port/tools/build_host64.py
+index c9e2744..eb4e692 100644
+--- a/port/tools/build_host64.py
++++ b/port/tools/build_host64.py
+@@ -22,8 +22,9 @@ port/tools/rustgs.py, release profile; wgpu on DX12 or Vulkan, Metal, Vulkan), w
+ the libraries rustc lists for it (--print native-static-libs, checked by rustgs). What differs per
+ target is in TARGETS: the compiler and its flags, the linker, SDL3's build, the Rust triple, the
+ output and the fibers' register switch (fiber.c is shared; fiber_win64.c, fiber_sysv64.c or
+-fiber_arm64.c per CPU and ABI). Bounds are checked by guard pages on every target (guest_memory.c reserves 8 GiB: every
+-wasm32 address plus offset), and WABT's call-depth counter is a plain global (the module runs on one
++fiber_arm64.c per CPU and ABI). iOS uses explicit bounds checks and a 2 GiB reservation plus an end
++guard. Other targets use 8 GiB of guard pages for every wasm32 address plus offset.
++WABT's call-depth counter is a plain global (the module runs on one
+ OS thread), as dhd64.exe has them since finding 082 W7e.
+ 
+ Toolchains: win-x64 and android-arm64 build on Windows (clang-cl, MSVC's headers and lld-link; the
+@@ -402,13 +403,15 @@ def main():
+                              if split == 'chunks' or p.parent == work)
+             stamp.write_text(json.dumps({'key': prepared.hexdigest(), 'units': [str(u) for u in units],
+                                          'imports': imports, 'split': split, 'headers': headers}))
+-        # Bounds checks by guard pages: what lies beyond the memory's size is reserved, never
+-        # committed, so an out-of-bounds access faults and its reporter (guest_memory_*.c) names the
+-        # guest address and ends the process, as the trap did. WABT's own fault-to-trap handler stays
++        # iOS uses WABT's explicit bounds checks with a smaller virtual reservation. Other targets
++        # use guard pages: out-of-bounds accesses fault and guest_memory_*.c reports the address.
++        # WABT's own fault-to-trap handler stays
+         # off (WASM_RT_SKIP_SIGNAL_RECOVERY): ours handle faults. Traps can come from any EE fiber:
+         # report and end (launcher.c).
+         defines = ['-DWASM_RT_STACK_DEPTH_COUNT=1', '-DWASM_RT_MAX_CALL_STACK_DEPTH=512', '-DWASM_RT_THREAD_LOCAL=',
+-                   '-DWASM_RT_MEMCHECK_GUARD_PAGES=1', '-DWASM_RT_SKIP_SIGNAL_RECOVERY=1']
++                   '-DWASM_RT_SKIP_SIGNAL_RECOVERY=1']
++        defines += (['-DWASM_RT_MEMCHECK_GUARD_PAGES=0', '-DWASM_RT_MEMCHECK_BOUNDS_CHECK=1'] if t.ios else
++                    ['-DWASM_RT_MEMCHECK_GUARD_PAGES=1'])
+         defines += ['-DHOST64_FAKE_MODULE=1'] if a.fake else ['-DWASM_RT_TRAP_HANDLER=host64_trap']
+         includes = ['-I'+str(work), '-I'+str(wabt/'include'), '-I'+str(rt), '-I'+str(SOURCE),
+                     '-I'+str(ROOT/'port/runtime'), '-I'+str(ROOT/'port/include'), '-I'+str(ROOT/'port/host'),

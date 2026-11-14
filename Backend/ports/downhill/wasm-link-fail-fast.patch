@@ -1,0 +1,264 @@
+diff --git a/port/tools/build_wasm.py b/port/tools/build_wasm.py
+index 3dd14cc..a0e96a8 100644
+--- a/port/tools/build_wasm.py
++++ b/port/tools/build_wasm.py
+@@ -23,12 +23,12 @@ The build stands on its own: everything it needs is generated here from the chec
+ and assets/vutext.bin (DHD_VUTEXT), including the VU1 AOT include (port/tools/vu1_aot.py) that
+ the native VU0 routines are derived from.
+ 
+-usage: python port/tools/build_wasm.py [-j 8]
++usage: python port/tools/build_wasm.py [-j 8] [--fail-fast]
+ Needs LLVM's clang, wasm-ld, llvm-nm, llvm-objcopy, llvm-cxxfilt on PATH (clang also assembles the
+ data image as a COFF object, for its checks only), WABT's wasm-objdump, the wasi-sdk sysroot
+ (WASI_SYSROOT) and SIMDe (SIMDE_DIR). The native hosts run wasm2c themselves (build_host64.py)."""
+ import argparse, collections, glob, hashlib, json, os, re, shutil, subprocess, sys, threading, time
+-from concurrent.futures import ThreadPoolExecutor
++from concurrent.futures import ThreadPoolExecutor, as_completed
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ ROOT = os.path.dirname(os.path.dirname(HERE))
+@@ -695,6 +695,34 @@ def compile_c(job):
+     return rec
+ 
+ 
++def require_compiled(result):
++    if result['status'] == 'ok':
++        return
++    line, error = result['errors'][0] if result['errors'] else (0, '')
++    location = '%s:%d' % (result['unit'], line) if line else result['unit']
++    sys.exit('%s (%s): %s' % (location, result['stage'], error or 'compiler returned an error'))
++
++
++def build_units(executor, worker, jobs, *, fail_fast, check=None):
++    """Keep results in job order, but report the first completed error in fail-fast mode."""
++    if not fail_fast:
++        return list(executor.map(worker, jobs))
++    pending = {executor.submit(worker, job): i for i, job in enumerate(jobs)}
++    results = [None] * len(pending)
++    try:
++        for future in as_completed(pending):
++            result = future.result()
++            if check is not None:
++                check(result)
++            results[pending[future]] = result
++    except BaseException:
++        # Let active compilers finish writing their outputs. Drop work that has not started.
++        for future in pending:
++            future.cancel()
++        raise
++    return results
++
++
+ def port_include(src_dir_hint):
+     return ['-fdeclspec', '-DXXH_VECTOR=0', '-I', PORT_OUT + '/runtime', '-I', PORT_OUT + '/include', '-I', INC_OUT,
+             '-I', os.path.join(ROOT, 'include'), '-I', SHIM, '-I', SIMDE]
+@@ -755,7 +783,7 @@ def function_addresses(text, funcs):
+     return LOCAL_LABEL.sub(lambda m: '#define %s ((char *)(unsigned)0x%s)' % (m.group(1), m.group(2)), text)
+ 
+ 
+-def recompile_objects(objs, rewrite_aliases, max_workers=8):
++def recompile_objects(objs, rewrite_aliases, max_workers=8, *, fail_fast=False):
+     """{name: asm} of the asm-only functions the objects need, recompiled to C and compiled."""
+     recomp.OUT = RECOMP_OUT
+     recomp.WASM_EMIT = True
+@@ -796,6 +824,8 @@ def recompile_objects(objs, rewrite_aliases, max_workers=8):
+                     paths, failures = recomp.recompile(sorted(names))
+                     break
+                 except SystemExit as e:
++                    if fail_fast:
++                        raise
+                     bad = set(re.findall(r'(func_[0-9A-F]{8}): unreviewed', str(e)))
+                     if not bad:
+                         raise
+@@ -811,7 +841,16 @@ def recompile_objects(objs, rewrite_aliases, max_workers=8):
+                     names -= bad
+                     print('scalar guard refused %d: %s' % (len(bad), ', '.join(sorted(bad))), flush=True)
+             failed.update(failures)
+-            print('recompile step: %d names, %d files, %d failures' % (len(new), len(paths), len(failures)), flush=True)
++            if fail_fast:
++                unexpected = sorted(failures.keys() - MISSING)
++                if unexpected:
++                    name = unexpected[0]
++                    sys.exit('AOT recompiler: %s: %s' % (name, failures[name]))
++                print('recompile step: %d names, %d files, %d known SDK stubs' %
++                      (len(new), len(paths), len(failures)), flush=True)
++            else:
++                print('recompile step: %d names, %d files, %d failures' %
++                      (len(new), len(paths), len(failures)), flush=True)
+             funcs = set(names) | {n for n, k in kinds0.items() if k == 'func'}
+             for p in paths:  # the generated code declares data as numbers too
+                 write(p, rewrite(function_addresses(open(p, encoding='utf-8').read(), funcs), rewrite_aliases))
+@@ -820,7 +859,7 @@ def recompile_objects(objs, rewrite_aliases, max_workers=8):
+                     for p in paths]
+             for j in jobs:
+                 JOBS[j[2]] = (compile_c, j)
+-            results = list(ex.map(compile_c, jobs))
++            results = build_units(ex, compile_c, jobs, fail_fast=fail_fast, check=require_compiled)
+             bad = [r for r in results if r['status'] != 'ok']
+             if bad:
+                 print('recompiled functions that failed to compile for wasm: %d' % len(bad))
+@@ -864,7 +903,9 @@ def wasm_link(objs, out, allow_all, host_syms):
+ 
+ def wasm_link_once(objs, out, allow_all, host_syms):
+     rsp = os.path.join(OUT, 'objs.rsp')
+-    write(rsp, ''.join(o.replace(os.sep, '/') + '\n' for o in objs))
++    # wasm-ld parses @files with GNU quoting. Keep each object path as a single argument.
++    paths = (o.replace(os.sep, '/').replace('\\', '\\\\').replace('"', '\\"') for o in objs)
++    write(rsp, ''.join('"%s"\n' % path for path in paths))
+     cmd = ['wasm-ld', '--no-entry', '--no-stack-first', '--global-base=%d' % STACK_BASE,
+            '-z', 'stack-size=%d' % STACK_SIZE, '--initial-memory=%d' % INITIAL_MEMORY,
+            '--max-memory=%d' % MAX_MEMORY, '--export=__main_argc_argv', '--export=__stack_pointer',
+@@ -879,6 +920,21 @@ def wasm_link_once(objs, out, allow_all, host_syms):
+     return run(cmd)
+ 
+ 
++def link_core(objs, host_syms, *, fail_fast):
++    strict = wasm_link(objs, WASM, False, host_syms)
++    print('strict link: %s' % ('ok' if strict.returncode == 0 else 'FAILED'), flush=True)
++    link_txt = strict.stdout + strict.stderr
++    if strict.returncode and not fail_fast:
++        diag = wasm_link(objs, WASM, True, host_syms)
++        link_txt += '\n--- diagnostic link (--allow-undefined) ---\n' + diag.stdout + diag.stderr
++        if diag.returncode:
++            sys.exit(diag.stderr)
++    write(os.path.join(OUT, 'link.txt'), link_txt)
++    if strict.returncode and fail_fast:
++        sys.exit(link_txt.strip() or 'wasm-ld exited with status %d' % strict.returncode)
++    return strict, link_txt
++
++
+ def wasm_objdump(path, *flags):
+     """wasm-objdump's output. A run that hasn't ended after OBJDUMP_TIMEOUT seconds is killed and
+     tried again: on Windows it can hang at start with no CPU used (a file scanner holding the new
+@@ -1144,7 +1200,7 @@ def libc_signatures(names):
+     return {n: s for n, s in out.items() if s is not None}
+ 
+ 
+-def abi_stage(objs, rc_objs, failed_units, max_workers=8):
++def abi_stage(objs, rc_objs, failed_units, max_workers=8, *, fail_fast=False):
+     """abi_stage_core, with the adapters that the C++ renames asked for (INTRA_THUNKS) compiled into
+     the objects, until the set of adapters is stable."""
+     c = os.path.join(OUT, 'abi', 'intra.c')
+@@ -1159,13 +1215,13 @@ def abi_stage(objs, rc_objs, failed_units, max_workers=8):
+             JOBS[obj] = (compile_c, job)
+             if obj not in objs:
+                 objs.append(obj)
+-        result = abi_stage_core(objs, rc_objs, failed_units, max_workers)
++        result = abi_stage_core(objs, rc_objs, failed_units, max_workers, fail_fast=fail_fast)
+         if keys == set(INTRA_THUNKS):
+             return result
+     sys.exit('intra-object adapters did not settle')
+ 
+ 
+-def abi_stage_core(objs, rc_objs, failed_units, max_workers=8):
++def abi_stage_core(objs, rc_objs, failed_units, max_workers=8, *, fail_fast=False):
+     """Stubs for the uncompiled functions, then the signature table, the rebuilt callers and the
+     thunks. Returns the extra objects to link, and the table."""
+     all_objs = objs + rc_objs
+@@ -1219,6 +1275,8 @@ def abi_stage_core(objs, rc_objs, failed_units, max_workers=8):
+         if caller not in JOBS:
+             sys.exit('cannot rebuild %s: no recorded job' % caller)
+         r = rebuild_with(caller, names)
++        if fail_fast:
++            require_compiled(r)
+         if r['status'] != 'ok':
+             print('rebuild failed: %s: %s' % (caller, r['errors'][:1]), flush=True)
+         sigs[caller] = object_signatures(caller)
+@@ -1416,9 +1474,14 @@ def core_cache_put(key):
+ def main():
+     ap = argparse.ArgumentParser()
+     ap.add_argument('-j', type=int, default=8)
++    ap.add_argument('--fail-fast', action='store_true',
++                    help='stop on unexpected compilation or strict link failures')
+     a = ap.parse_args()
+     t0 = time.time()
+     key = core_inputs_key()
++    if a.fail_fast:
++        # The diagnostic build can cache a permissively linked module under its own key.
++        key = hashlib.sha256((key + ':fail-fast').encode()).hexdigest()
+     if core_cache_get(key):
+         print('done in %.0f s' % (time.time() - t0))
+         return
+@@ -1471,14 +1534,16 @@ def build(a, t0, key):
+             for name in C_DEFINITIONS.get(rel, ()):  # per unit: a C++ definition other units call by its C name
+                 text = re.sub(r'(?m)^(\w[\w\s\*]*?\s+)(%s)\s*\(' % name, r'extern "C" \1\2(', text)
+             text = transform.transform(cpp_linkage(text) if cpp else text, cpp, '', IMAGE)
+-        except Exception as e:  # noqa: BLE001 (reported, the build goes on)
++        except Exception as e:  # noqa: BLE001 (report the source unit with the error)
++            if a.fail_fast:
++                sys.exit('src/%s (transform): %s' % (rel, e))
+             return rel, None, cpp, str(e)
+         dst = os.path.join(SRC_OUT, rel)
+         write(dst, '#include "port.h"\n#line 1 "src/%s"\n%s' % (rel, rewrite(fix_function_arrays(text), aliases)))
+         return rel, dst, cpp, None
+     srcs = sorted(glob.glob(os.path.join(SRC_ROOT, '**', '*.c*'), recursive=True))
+     with ThreadPoolExecutor(a.j) as ex:
+-        transformed = list(ex.map(transform_unit, srcs))
++        transformed = build_units(ex, transform_unit, srcs, fail_fast=a.fail_fast)
+     records = [{'unit': 'src/' + rel, 'status': 'failed', 'stage': 'transform', 'errors': [(0, err)]}
+                for rel, dst, cpp, err in transformed if dst is None]
+     jobs = [(rel, dst, os.path.join(OBJ, 'src', rel + '.o'), cpp) for rel, dst, cpp, err in transformed if dst]
+@@ -1486,7 +1551,7 @@ def build(a, t0, key):
+     with ThreadPoolExecutor(a.j) as ex:
+         for j in jobs:
+             JOBS[j[2]] = (compile_src, j)
+-        records += list(ex.map(compile_src, jobs))
++        records += build_units(ex, compile_src, jobs, fail_fast=a.fail_fast, check=require_compiled)
+     src_objs = [j[2] for j, r in zip(jobs, records[len(records) - len(jobs):]) if r['status'] == 'ok']
+     print('game units compiled: %d of %d' % (len(src_objs), len(srcs)), flush=True)
+     show_failures([r for r in records if r['status'] != 'ok'], 'game units')
+@@ -1516,7 +1581,7 @@ def build(a, t0, key):
+     with ThreadPoolExecutor(a.j) as ex:
+         for j in port_jobs:
+             JOBS[j[2]] = (compile_c, j)
+-        port_res = list(ex.map(lambda j: compile_c((j[0], j[1], j[2], j[3])), port_jobs))
++        port_res = build_units(ex, compile_c, port_jobs, fail_fast=a.fail_fast, check=require_compiled)
+     port_objs = [j[2] for j, r in zip(port_jobs, port_res) if r['status'] == 'ok']
+     skipped = [(j[0], r) for j, r in zip(port_jobs, port_res) if r['status'] != 'ok']
+     records += [{'unit': 'port/' + j[0], 'status': r['status'], 'errors': r['errors'], 'stage': r['stage']}
+@@ -1526,8 +1591,9 @@ def build(a, t0, key):
+ 
+     # 5. recompiled asm-only functions, to a fixed point over the objects
+     objs = src_objs + port_objs
+-    rc_objs, rc_names, rc_failed = recompile_objects(objs, aliases, a.j)
+-    print('recompiled functions: %d (%d failed in the recompiler)' % (len(rc_names), len(rc_failed)), flush=True)
++    rc_objs, rc_names, rc_failed = recompile_objects(objs, aliases, a.j, fail_fast=a.fail_fast)
++    status = 'known SDK stubs' if a.fail_fast else 'failed in the recompiler'
++    print('recompiled functions: %d (%d %s)' % (len(rc_names), len(rc_failed), status), flush=True)
+ 
+     # 5a. ps2asm.c again, with generated code for every inline asm template and recompiled COP2
+     # instruction now in the sources (ps2asm_aot.py): the interpreter's own per-instruction code
+@@ -1560,7 +1626,9 @@ def build(a, t0, key):
+         sys.exit('recompiled although a game unit defines them in C (%d): %s' % (len(ran_mips), ' '.join(ran_mips)))
+ 
+     # 5b. signatures across objects: stubs, then thunks for the callers that disagree
+-    abi = abi_stage(objs, rc_objs, [r['unit'] for r in records if r['status'] != 'ok'], a.j)
++    abi = abi_stage(objs, rc_objs, [r['unit'] for r in records if r['status'] != 'ok'], a.j, fail_fast=a.fail_fast)
++    if a.fail_fast and abi['left']:
++        sys.exit('unresolved ABI signature conflicts: %d' % abi['left'])
+     abi_objs = abi['objs']
+ 
+     # 6. the fixups, once the functions and the data names of every object are known
+@@ -1574,20 +1642,9 @@ def build(a, t0, key):
+     if p.returncode:
+         sys.exit(p.stderr)
+ 
+-    # 7. the link: strict first (imports: host_api.h only), then a diagnostic link that allows the rest
++    # 7. the strict link (imports: host_api.h only), with a diagnostic fallback outside fail-fast mode
+     all_objs = objs + rc_objs + abi_objs + [fx_obj]  # wasm_link adds the code and data tables (codeids.c)
+-    strict = wasm_link(all_objs, WASM, False, host_syms)
+-    print('strict link: %s' % ('ok' if strict.returncode == 0 else 'FAILED'), flush=True)
+-    link_txt = strict.stdout + strict.stderr
+-    unresolved = collections.defaultdict(set)
+-    for name, refs in re.findall(r'undefined symbol: (\S+)\n((?:>>> .*\n?)*)', strict.stderr):
+-        unresolved[name] |= set(re.findall(r'>>> referenced by .*?\(([^)]+)\)', refs) or ['?'])
+-    if strict.returncode:
+-        diag = wasm_link(all_objs, WASM, True, host_syms)
+-        link_txt += '\n--- diagnostic link (--allow-undefined) ---\n' + diag.stdout + diag.stderr
+-        if diag.returncode:
+-            sys.exit(diag.stderr)
+-    write(os.path.join(OUT, 'link.txt'), link_txt)
++    strict, link_txt = link_core(all_objs, host_syms, fail_fast=a.fail_fast)
+     # the indirect-call fix (wasm_postlink.py): one shadow table per call type, cdecl-slot adapters; before wasm2c
+     __import__('wasm_postlink').postlink(WASM, WASM, report=os.path.join(OUT, 'postlink.json'))
+     # every data name must resolve to its PS2 address: an undefined one links to 0 (the diagnostic link

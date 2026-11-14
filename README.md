@@ -1,0 +1,46 @@
+# PS2Apple 1.0
+
+PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on macOS or Windows and build an IPA from its code.
+
+**Created by iSolution.** Subscribe for updates and gameplay demos. [iSolution on YouTube](https://www.youtube.com/@iSolutional) · [Discord](https://discord.gg/e58k5bkja3)
+
+## Download and build
+
+| Platform | Release asset | Build setup |
+| --- | --- | --- |
+| macOS on Apple Silicon | `PS2Apple-1.0-Mac.dmg` | Drag PS2Apple into Applications. Install and open full Xcode once, then use **Install Everything** in PS2Apple. |
+| Windows 11 x64 | `PS2Apple-1.0-Windows-x64.exe` | Run the portable EXE. The bundled compiler and linker build IPA files locally and offline. |
+
+1. Download your desktop app from [PS2Apple Releases](https://github.com/royilkom-alt/PS2Apple/releases/latest).
+2. Click **Choose ISO**, select your PS2 disc image and an output folder, then click **Build IPA**. On Mac, the button is **Build Native IPA** or **Build Test IPA**, depending on the disc.
+3. Sign and install the IPA on an iPhone or iPad running iOS or iPadOS 18 or later. In the launcher, tap **Play**, then select the original ISO in **Files** on first launch. The launcher remembers the ISO and the game saves to its memory card.
+
+## Tested by iSolution (Playable)
+
+Tests ran on an **iPhone 17 Pro**. The table shows the FPS observed during gameplay on the USA editions below.
+
+| Game | USA disc serial | Observed FPS |
+| --- | --- | ---: |
+| Black | `SLUS-21376` | 30–60 |
+| Burnout 3: Takedown | `SLUS-21050` | 60 |
+| Downhill Domination | `SCUS-97177` | 60 |
+| Dragon Ball Z: Budokai Tenkaichi 3 | `SLUS-21678` | 60 |
+| Final Fantasy X | `SLUS-20312` | 60 |
+| Guitar Hero II | `SLUS-21447` | 60 |
+| Guitar Hero Encore: Rocks the ’80s | `SLUS-21586` | 60 |
+| Harvest Moon: A Wonderful Life Special Edition | `SLUS-21171` | 60 |
+| Kingdom Hearts | `SLUS-20370` | 60 |
+| Mortal Kombat: Shaolin Monks | `SLUS-21087` | 60 |
+| Resident Evil 4 | `SLUS-21134` | 30–60 |
+
+**Tested by iSolution (Unstable)** · Tomb Raider: Underworld (USA, `SLUS-21858`) ran at 45–60 FPS in smoother sections and dropped to around 12 FPS with audio stutter in some fire effects.
+
+## Test method
+
+Build the IPA from the ISO, sign and install it on an iPhone 17 Pro, then select the same ISO and play past the intro and menus. Record the FPS observed during gameplay and any frame drops, audio glitches, or crashes.
+
+Both desktop apps build for ARM64 iPhoneOS. PS2Apple uses ahead-of-time (AOT) compilation for its general build path and applies disc-specific fixes where available. On Windows, offline ISO-to-IPA generation was verified with homebrew, and Guitar Hero Encore passed a 6,900-frame desktop boot check before its IPA was packaged. Device gameplay for Windows-generated IPAs is pending.
+
+## Credits
+
+PS2Apple uses [ps2-native-recomp](https://github.com/exoteric33/ps2-native-recomp/tree/e9a48aae8e0537f3a91d8584b2d78c6056723435) and builds on work from [Downhill Revived](https://github.com/skuza-oss/downhill-revived/tree/ac62c78def347e2911b1dad5df69cc534081a487) and [BT3-Recomp](https://github.com/z3xox/BT3-Recomp/tree/e22a34beb564e2d0f32bd60b02f0a95d9645ddcc). See the [component notices](licenses/README.md) for details. Use your own PS2 disc images.

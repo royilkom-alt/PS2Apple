@@ -1,0 +1,524 @@
+diff --git a/port/gs/present.c b/port/gs/present.c
+index b9d0bce..9e2e846 100644
+--- a/port/gs/present.c
++++ b/port/gs/present.c
+@@ -50,7 +50,11 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+ #define FIXED_SCREEN 1  /* the whole screen, immersive (landscape: android_main.c's hint) */
+ #elif defined(__APPLE__)
+ #define WINDOW_FLAGS SDL_WINDOW_METAL  /* the renderer draws into an SDL Metal view's layer */
++#ifdef DHD_IOS
++#define FIXED_SCREEN 1
++#else
+ #define FIXED_SCREEN 0
++#endif
+ static SDL_MetalView metal_view;
+ #else
+ #define WINDOW_FLAGS 0
+@@ -95,7 +99,7 @@ static void window_target(void *unused)
+    make_window's hints; SDL_SetWindowIcon would give the title bar one 512-pixel picture scaled
+    down) and the APK's. Elsewhere nothing else gives the window one (Linux) or it is the bundle's
+    own picture (macOS): port/res/icon.png, embedded by build_host64.py. */
+-#if defined(_WIN32) || defined(__ANDROID__)
++#if defined(_WIN32) || defined(__ANDROID__) || defined(DHD_IOS)
+ static void window_icon(void) {}
+ #else
+ #include "dhd_icon.inc"  /* dhd_icon_png: port/res/icon.png's bytes */
+diff --git a/port/hle/host.c b/port/hle/host.c
+index 7e08d46..7d84586 100644
+--- a/port/hle/host.c
++++ b/port/hle/host.c
+@@ -1317,6 +1317,8 @@ int host_disc_ready(void)
+        the copy, so the next start asks for the disc again. */
+     static const char choose[] = "Start the game again to choose your Downhill Domination (USA) disc image (SCUS-97177).";
+     if (iso) remove(iso);
++#elif defined(DHD_IOS)
++    static const char choose[] = "In Files, put the original disc in Downhill Revived as SCUS-97177.iso, then reopen the app.";
+ #else
+     static const char choose[] = "Start the game from its launcher (DownhillRevived) and choose your Downhill "
+                                  "Domination (USA) disc image (SCUS-97177) there.";
+@@ -1341,9 +1343,8 @@ int host_disc_ready(void)
+ void host_service_host_init(void) { host_init(); }
+ void host_service_host_console_init(void) { host_console_init(); }
+ int host_service_host_disc_ready(void) { return host_disc_ready(); }
+-#ifdef __ANDROID__
+-/* The Android start (port/host/android_main.c) checks the copy it made of the player's disc image:
+-   NULL when it is Downhill Domination (USA), else why not. */
++#if defined(__ANDROID__) || defined(DHD_IOS)
++/* The mobile entry checks the disc header before launching the core. */
+ const char *host_disc_check(const char *path)
+ {
+     static char why[512];
+diff --git a/port/host/host_posix.c b/port/host/host_posix.c
+index ac9d390..10e6909 100644
+--- a/port/host/host_posix.c
++++ b/port/host/host_posix.c
+@@ -50,7 +50,11 @@ unsigned long host_last_error(void) { return (unsigned long)errno; }
+ 
+ unsigned host_exe_path(char *out, unsigned size)
+ {
+-#ifdef __ANDROID__
++#ifdef DHD_IOS
++    const char *ios_exe_path(void);
++    int k = snprintf(out, size, "%s", ios_exe_path());
++    return k > 0 && (unsigned)k < size ? (unsigned)k : 0;
++#elif defined(__ANDROID__)
+     /* No executable of our own (the app is app_process with libmain.so): the app's files folder
+        stands for dhd.exe's (android_main.c), so dhd.ini, saves and dhd.log go there. */
+     const char *android_exe_path(void);
+@@ -358,6 +362,11 @@ uintptr_t host_heartbeat_eip(void) { return 0; }
+    None of the game's work runs at that priority. */
+ void host_os_sleep_ns(unsigned long long ns)
+ {
++#ifdef DHD_IOS
++    /* iOS app threads use ordinary sleeps under the device scheduler. */
++    struct timespec t = {(time_t)(ns / 1000000000u), (long)(ns % 1000000000u)};
++    while (nanosleep(&t, &t) < 0 && errno == EINTR) {}
++#else
+     static mach_timebase_info_data_t base;
+     if (!base.denom) mach_timebase_info(&base);
+     thread_port_t self = pthread_mach_thread_np(pthread_self());
+@@ -371,6 +380,7 @@ void host_os_sleep_ns(unsigned long long ns)
+         thread_standard_policy_data_t standard = {0};
+         thread_policy_set(self, THREAD_STANDARD_POLICY, (thread_policy_t)&standard, THREAD_STANDARD_POLICY_COUNT);
+     }
++#endif
+ }
+ #endif
+ 
+@@ -406,7 +416,11 @@ void host_os_system(char *out, unsigned size)
+     char version[32] = "";
+     size_t n = sizeof version;
+     sysctlbyname("kern.osproductversion", version, &n, NULL, 0);
++#ifdef DHD_IOS
++    snprintf(os, sizeof os, "iOS %s", version);
++#else
+     snprintf(os, sizeof os, "macOS %s", version);
++#endif
+     n = sizeof cpu;
+     if (sysctlbyname("machdep.cpu.brand_string", cpu, &n, NULL, 0)) cpu[0] = 0;
+ #elif defined(__ANDROID__)
+diff --git a/port/host/touch_host.c b/port/host/touch_host.c
+index fdb472b..e206552 100644
+--- a/port/host/touch_host.c
++++ b/port/host/touch_host.c
+@@ -80,6 +80,10 @@ static int touch_on(void)
+         available = 1;
+         gs_mouse_touchscreen();   /* else the menus' first reading takes the first tap as its baseline */
+         SDL_SetAtomicInt(&tilt_sensor, -1);   /* the first tick asks */
++#elif defined(DHD_IOS)
++        available = 1;
++        gs_mouse_touchscreen();
++        SDL_SetAtomicInt(&tilt_sensor, 0);
+ #else
+         const char *mouse = getenv("DHD_TOUCH_MOUSE");
+         available = mouse && atoi(mouse) ? 2 : 0;
+@@ -118,6 +122,20 @@ static void screen_update(SDL_Window *window)
+         if (in[4]) s.cut_x0 = 0, s.cut_x1 = in[4] * mx, s.cut_y0 = 0, s.cut_y1 = s.height;
+         if (in[6]) s.cut_x0 = s.width - in[6] * mx, s.cut_x1 = s.width, s.cut_y0 = 0, s.cut_y1 = s.height;
+     }
++#elif defined(DHD_IOS)
++    int ww = 0, wh = 0;
++    if (!SDL_GetWindowSize(window, &ww, &wh) || ww <= 0 || wh <= 0) return;
++    /* UIKit points approximate the physical control size; use the actual safe area. */
++    const float points_per_mm = 163.0f / 25.4f;
++    s.width = ww / points_per_mm;
++    s.height = wh / points_per_mm;
++    SDL_Rect safe;
++    if (SDL_GetWindowSafeArea(window, &safe)) {
++        s.strip_left = safe.x / points_per_mm;
++        s.strip_top = safe.y / points_per_mm;
++        s.strip_right = (ww - safe.x - safe.w) / points_per_mm;
++        s.strip_bottom = (wh - safe.y - safe.h) / points_per_mm;
++    }
+ #else
+     const char *mm = getenv("DHD_TOUCH_SCREEN_MM");
+     float sw = 0, sh = 0;
+@@ -375,7 +393,11 @@ void host_service_touch_field(uint32_t address)
+     static int set_up;
+     if (!touch) {
+         touch = touch_new();
++#ifdef DHD_IOS
++        host_putenv_s("DHD_TOUCH", "ios");
++#else
+         host_putenv_s("DHD_TOUCH", touch_on() == 1 ? "android" : "mouse");
++#endif
+     }
+     int relay = 0;
+     SDL_LockMutex(lock);
+diff --git a/port/host64/guest_memory_posix.c b/port/host64/guest_memory_posix.c
+index 1a470a7..6f142fc 100644
+--- a/port/host64/guest_memory_posix.c
++++ b/port/host64/guest_memory_posix.c
+@@ -7,6 +7,7 @@
+ #define _GNU_SOURCE
+ #include <errno.h>
+ #include <fcntl.h>
++#include <limits.h>
+ #include "../host/backtrace_posix.h"  /* <execinfo.h>, or Android's own (API < 33) */
+ #include <signal.h>
+ #include <stdint.h>
+@@ -30,7 +31,19 @@ void os_fail(const char *what) {
+     fprintf(stderr,"host64 memory: %s (%d: %s)\n",what,errno,strerror(errno)); abort();
+ }
+ uintptr_t os_reserve(void) {
+-#ifdef __APPLE__  /* no memfd: a POSIX shared memory object, unlinked at once */
++#ifdef DHD_IOS
++    /* Alias a private sandbox file: POSIX named shared memory needs a separate namespace. */
++    const char *tmp = getenv("TMPDIR");
++    char name[PATH_MAX];
++    if (!tmp || !*tmp) return 0;
++    int n = snprintf(name, sizeof name, "%s/dhd-ram-XXXXXX", tmp);
++    if (n < 0 || (size_t)n >= sizeof name) return 0;
++    ram_fd = mkstemp(name);
++    if (ram_fd >= 0 && unlink(name) != 0) {
++        close(ram_fd);
++        ram_fd = -1;
++    }
++#elif defined(__APPLE__)  /* no memfd: a POSIX shared memory object, unlinked at once */
+     char name[32]; snprintf(name,sizeof name,"/dhd-guest-ram-%d",(int)getpid());
+     ram_fd=shm_open(name,O_RDWR|O_CREAT|O_EXCL,0600);
+     if (ram_fd>=0) shm_unlink(name);
+diff --git a/port/ios/main.m b/port/ios/main.m
+new file mode 100644
+index 0000000..4d4eb9a
+--- /dev/null
++++ b/port/ios/main.m
+@@ -0,0 +1,82 @@
++/* iPhoneOS entry for the shared SDL host. The disc is copied by the player through Files.
++   This file is part of the Downhill Revived port and is licensed GPL-3.0-or-later. */
++#import <Foundation/Foundation.h>
++#include <SDL3/SDL.h>
++#include <SDL3/SDL_main.h>
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include "../render/include/dhd_settings.h"
++
++int dhd_launcher_main(int argc, char **argv);
++const char *host_disc_check(const char *path);
++
++static char writable_executable_path[PATH_MAX];
++
++const char *ios_exe_path(void)
++{
++    return writable_executable_path;
++}
++
++static BOOL wait_for_disc(NSString *disc)
++{
++    const char *problem = host_disc_check(disc.fileSystemRepresentation);
++    if (!problem) return YES;
++    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
++        fprintf(stderr, "ios: could not start SDL video: %s\n", SDL_GetError());
++        return NO;
++    }
++    SDL_Window *window = SDL_CreateWindow("Downhill Revived", 640, 360, SDL_WINDOW_FULLSCREEN);
++    if (!window) {
++        fprintf(stderr, "ios: could not open the setup window: %s\n", SDL_GetError());
++        SDL_QuitSubSystem(SDL_INIT_VIDEO);
++        return NO;
++    }
++    while (problem) {
++        NSString *message = [NSString stringWithFormat:
++            @"%s\n\nCopy your Downhill Domination USA ISO to Files → On My iPhone → Downhill Revived. "
++             "Name it SCUS-97177.iso, then return here and tap Check Again.", problem];
++        const SDL_MessageBoxButtonData button = {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Check Again"};
++        const SDL_MessageBoxData box = {
++            SDL_MESSAGEBOX_INFORMATION, window, "Downhill Revived", message.UTF8String, 1, &button, NULL
++        };
++        if (!SDL_ShowMessageBox(&box, NULL)) break;
++        problem = host_disc_check(disc.fileSystemRepresentation);
++    }
++    SDL_DestroyWindow(window);
++    SDL_QuitSubSystem(SDL_INIT_VIDEO);
++    return problem == NULL;
++}
++
++int main(int argc, char **argv)
++{
++    @autoreleasepool {
++        NSFileManager *files = [NSFileManager defaultManager];
++        NSURL *support = [files URLForDirectory:NSApplicationSupportDirectory inDomain:NSUserDomainMask
++                           appropriateForURL:nil create:YES error:NULL];
++        NSURL *documents = [files URLForDirectory:NSDocumentDirectory inDomain:NSUserDomainMask
++                             appropriateForURL:nil create:YES error:NULL];
++        if (!support || !documents) return 1;
++
++        NSString *exe = [support.path stringByAppendingPathComponent:@"DownhillRevived"];
++        if (![exe getFileSystemRepresentation:writable_executable_path maxLength:sizeof writable_executable_path])
++            return 1;
++        NSString *disc = [documents.path stringByAppendingPathComponent:@"SCUS-97177.iso"];
++        NSString *settings = [support.path stringByAppendingPathComponent:@"dhd.ini"];
++        SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
++        SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
++        if (![files fileExistsAtPath:disc]) {
++            NSString *guide = [documents.path stringByAppendingPathComponent:@"Put SCUS-97177.iso Here.txt"];
++            [@"Copy your original Downhill Domination USA ISO here as SCUS-97177.iso."
++                 writeToFile:guide atomically:YES encoding:NSUTF8StringEncoding error:NULL];
++        }
++        if (!wait_for_disc(disc)) return 1;
++        if (!dhd_settings_save(settings.fileSystemRepresentation, "iso", disc.fileSystemRepresentation)) return 1;
++        setenv("TMPDIR", NSTemporaryDirectory().fileSystemRepresentation, 1);
++        setenv("DHD_LAUNCHER", "1", 1);
++        setenv("DHD_SETTINGS", settings.fileSystemRepresentation, 1);
++        setenv("DHD_DATA_DIR", support.fileSystemRepresentation, 1);
++        setenv("DHD_MEMCARD_DIR", support.fileSystemRepresentation, 1);
++        return dhd_launcher_main(argc, argv);
++    }
++}
+diff --git a/port/net/net.c b/port/net/net.c
+index 005e171..adcb921 100644
+--- a/port/net/net.c
++++ b/port/net/net.c
+@@ -18,7 +18,9 @@ enum { REJOIN_ATTEMPTS = 5, SFU_CODE_LENGTH = 6, P2P_CODE_LENGTH = 7 };
+    143): their speed and the touch controls come first; Android builds refuse every SFU room here,
+    whatever asks (the menu, DHD_NET_*, a dhd.ini server). P2P rooms are (findings 180, 186), the SFU
+    fallback of their members included. */
+-#ifdef __ANDROID__
++#ifdef DHD_IOS
++#define NET_OFFERED 0  /* Initial iPhoneOS build targets local play. */
++#elif defined(__ANDROID__)
+ #define NET_OFFERED NET_OFFER_P2P
+ #else
+ #define NET_OFFERED (NET_OFFER_SFU | NET_OFFER_P2P)
+diff --git a/port/render/native-static-libs-aarch64-apple-ios.txt b/port/render/native-static-libs-aarch64-apple-ios.txt
+new file mode 100644
+index 0000000..f570bf3
+--- /dev/null
++++ b/port/render/native-static-libs-aarch64-apple-ios.txt
+@@ -0,0 +1,2 @@
++# Xcode iPhoneOS system libraries permitted for the iOS static Rust renderer.
++-lSystem -framework QuartzCore -framework Metal -framework Foundation -framework CoreFoundation -framework Security -framework SystemConfiguration -framework CoreGraphics -framework UIKit -lobjc -liconv -lc -lm -ldl -lresolv -lc++
+diff --git a/port/render/rust-toolchain.toml b/port/render/rust-toolchain.toml
+index 8325af5..e620868 100644
+--- a/port/render/rust-toolchain.toml
++++ b/port/render/rust-toolchain.toml
+@@ -5,4 +5,4 @@
+ channel = "1.97.1"
+ profile = "minimal"
+ targets = ["x86_64-pc-windows-msvc", "wasm32-unknown-unknown", "aarch64-linux-android", "aarch64-apple-darwin",
+-           "x86_64-unknown-linux-gnu"]
++           "x86_64-unknown-linux-gnu", "aarch64-apple-ios"]
+diff --git a/port/tools/build_host64.py b/port/tools/build_host64.py
+index 2449980..c9e2744 100644
+--- a/port/tools/build_host64.py
++++ b/port/tools/build_host64.py
+@@ -5,6 +5,7 @@
+     python3 port/tools/build_host64.py --target linux-x64 MODULE                 # Linux or WSL: dhd64 (ELF)
+     python3 port/tools/build_host64.py --target macos-arm64 MODULE               # a Mac: dhd64 (Mach-O)
+     python port/tools/build_host64.py --target android-arm64 MODULE --jobs 2     # libmain.so (finding 091)
++    python3 port/tools/build_host64.py --target ios-arm64 MODULE                 # iPhoneOS; supply static SDL3
+     python port/tools/build_host64.py [--target T] --fiber-test                  # the EE fibers alone
+ 
+ MODULE is a .wasm or WABT .c units (module name must be core; a Mac without wasm2c takes the C that
+@@ -39,7 +40,7 @@ build/android/lib/arm64-v8a/libmain.so (stripped) and libSDL3.so, the two librar
+ (llvm-addr2line -e build/android/libmain.debug.so 0xOFFSET for a crash report's frames).
+ """
+ import argparse
+-from concurrent.futures import ThreadPoolExecutor
++from concurrent.futures import ThreadPoolExecutor, as_completed
+ import hashlib
+ import json
+ import os
+@@ -73,10 +74,12 @@ class Target:
+         self.fiber = fiber  # the fiber switch's adapter, port/host64/fiber_<fiber>.c (the CPU and its ABI)
+         self.flags, self.wabt, self.simde = list(flags), Path(os.environ.get('WABT_DIR') or wabt), simde
+         self.windows, self.android, self.mac = key == 'win-x64', key == 'android-arm64', key == 'macos-arm64'
++        self.ios = key == 'ios-arm64'
+         self.posix = not self.windows
+ 
+ 
+ MAC_MIN = '11.0'  # the first macOS on Apple silicon (package_release.py's LSMinimumSystemVersion)
++IOS_MIN = '17.0'
+ ANDROID_API = 30  # sdl3.ANDROID_API: Android 11
+ TARGETS = {t.key: t for t in (
+     Target('win-x64', 'x86_64-pc-windows-msvc', 'build/host64-exe', 'dhd64.exe', 'win64'),
+@@ -86,6 +89,8 @@ TARGETS = {t.key: t for t in (
+     Target('macos-arm64', 'aarch64-apple-darwin', 'build/host64-macos', 'dhd64', 'arm64', jobs=4,
+            flags=['-arch', 'arm64', '-mmacosx-version-min=' + MAC_MIN, '-mcpu=apple-m1'],
+            wabt='/opt/homebrew/opt/wabt', simde=Path.home() / 'DevCaches/simde-src'),
++    Target('ios-arm64', 'aarch64-apple-ios', 'build/host64-ios', 'DownhillRevived', 'arm64',
++           jobs=4, outputs=8, flags=['-target', 'arm64-apple-ios' + IOS_MIN]),
+     # -march=armv8-a: every arm64 phone. ARMv8.2 (finding 091's first choice) closed the game at
+     # start with SIGILL on ARMv8.0 cores, which budget chips still ship (the Snapdragon 680's
+     # Cortex-A73/A53, issues #45 and #51; finding 155). -moutline-atomics keeps the ARMv8.1 atomics
+@@ -109,7 +114,8 @@ ANDROID_EXPORTS = '{\n  global: SDL_main;\n  local: *;\n};\n'
+ def host_units(t):
+     if t.windows:
+         return list(HOST_UNITS)
+-    return [POSIX_UNITS.get(u, u) for u in HOST_UNITS if u not in WINDOWS_ONLY] + (ANDROID_UNITS if t.android else [])
++    platform_units = ANDROID_UNITS if t.android else ['port/ios/main.m'] if t.ios else []
++    return [POSIX_UNITS.get(u, u) for u in HOST_UNITS if u not in WINDOWS_ONLY] + platform_units
+ 
+ 
+ def glue(t):
+@@ -250,6 +256,16 @@ def main():
+                      help='optimize with this profile (llvm-profdata merge of the .profraw files)')
+     a = p.parse_args()
+     t = TARGETS[a.target]
++    if t.ios:
++        if sys.platform != 'darwin':
++            p.error('ios-arm64 requires macOS with the Xcode iPhoneOS SDK')
++        if a.run or a.fiber_test:
++            p.error('ios-arm64 binaries must be tested on an iOS device')
++        if not (a.sdl_lib and a.sdl_include and a.sdl_libs):
++            p.error('ios-arm64 requires --sdl-lib, --sdl-include and --sdl-libs for static iOS SDL3')
++        sdk = subprocess.check_output(['/usr/bin/xcrun', '--sdk', 'iphoneos', '--show-sdk-path'],
++                                      text=True).strip()
++        t.flags += ['-isysroot', sdk, '-DDHD_IOS=1']
+     if not a.fiber_test and not a.fake and not a.module:
+         # no module named: build_wasm.py's output (port/tools/build.py builds both in order)
+         default = ROOT / 'build' / 'wasm' / 'dhd_core.wasm'
+@@ -292,6 +308,8 @@ def main():
+         cc, ar = tools / 'clang.exe', tools / 'llvm-ar.exe'
+         if not cc.exists():
+             p.error('no NDK clang at %s' % cc)
++    elif t.ios:
++        ndk, tools, cc, ar = None, None, '/usr/bin/clang', '/usr/bin/ar'
+     elif t.posix:
+         ndk, tools, cc, ar = None, None, 'clang', 'ar'
+     if a.fiber_test:
+@@ -438,8 +456,10 @@ def main():
+                 extra += ['-DPS2_VU_AOT']
+             if rel.endswith('gs/gpu_rust.c'):
+                 extra += ['-I'+str(ROOT/'port/render/include')]  # dhd_render.h
+-            if rel.endswith('host64/launcher.c') and t.android:
+-                extra += ['-Dmain=dhd_launcher_main']  # SDL_main (android_main.c) calls it
++            if rel.endswith('host64/launcher.c') and (t.android or t.ios):
++                extra += ['-Dmain=dhd_launcher_main']  # The mobile SDL entry calls it
++            if rel == 'port/ios/main.m':
++                extra += ['-fobjc-arc']
+             if 'libmpeg2/' in rel:
+                 extra += ['-I'+str(ROOT/'port/third_party/libmpeg2')]
+             obj = objdir/(rel.replace('/', '_') + suffix)
+@@ -468,6 +488,11 @@ def main():
+         with ThreadPoolExecutor(jobs) as pool:
+             done = {s: pool.submit(compile_one, s, 900 if s in host_sources else 1800)
+                     for s in sorted(sources + host_sources, key=lambda s: -Path(s).stat().st_size)}
++            if t.ios:
++                for count, future in enumerate(as_completed(done.values()), 1):
++                    future.result()
++                    if count % 10 == 0 or count == len(done):
++                        print(f'iPhoneOS compile: {count} of {len(done)} objects', flush=True)
+             objects = [done[s].result() for s in sources]
+             host_objects = [done[s].result() for s in host_sources]
+         step('C')
+@@ -524,6 +549,10 @@ def main():
+             exe = lib_dir/t.exe
+             run([tools/'llvm-strip.exe', '--strip-unneeded', '-o', exe, debug])
+             run([tools/'llvm-strip.exe', '--strip-unneeded', '-o', lib_dir/'libSDL3.so', sdl_lib])
++        elif t.ios:
++            run([cc, *t.flags, '-Wl,-dead_strip', '-Wl,-ObjC', '-Wl,-S', *objects,
++                 library, report['lib'], sdl_lib, *sdl_libs, *rust_libs,
++                 '-framework', 'Foundation', '-framework', 'UIKit', '-o', exe], timeout=900)
+         elif t.mac:
+             # ld64: -dead_strip as --gc-sections; no -rdynamic (exporting every symbol keeps the
+             # module-side code of fps.c alive, which names guest data the host does not have); -S: no
+diff --git a/port/tools/build_wasm.py b/port/tools/build_wasm.py
+index e3e5465..3dd14cc 100644
+--- a/port/tools/build_wasm.py
++++ b/port/tools/build_wasm.py
+@@ -438,7 +438,8 @@ def image_stage(wanted):
+     aliases = {}
+     for m in re.finditer(r'/alternatename:(\w+)=(\w+)', symbols_s):
+         aliases[m.group(1)] = m.group(2)
+-    p = run(['clang', '--target=i686-pc-windows-itanium', '-c', paths[0], '-o', paths[0] + '.o'])
++    data_clang = os.environ.get('DHD_DATA_CLANG') or 'clang'
++    p = run([data_clang, '--target=i686-pc-windows-itanium', '-c', paths[0], '-o', paths[0] + '.o'])
+     if p.returncode:
+         sys.exit(p.stderr)
+     image_obj = paths[0] + '.o'
+@@ -1274,7 +1275,7 @@ NOT_CORE = ('docs/', 'online/', '.github/', 'port/launcher/', 'port/render/', 'p
+ CORE_NEW_FILES = ('src/', 'include/', 'port/runtime/', 'port/hle/', 'port/include/', 'port/host/', 'port/gs/',
+                   'port/net/', 'port/tools/', 'port/patches')
+ # the environment the build reads (the tools' folders are in the key by their resolved paths)
+-CORE_ENV = ('DHD_VUTEXT', 'WASI_SYSROOT', 'SIMDE_DIR', 'WABT_DIR')
++CORE_ENV = ('DHD_VUTEXT', 'WASI_SYSROOT', 'SIMDE_DIR', 'WABT_DIR', 'DHD_DATA_CLANG')
+ 
+ 
+ def core_inputs_key():
+diff --git a/port/tools/check_rust_lib.py b/port/tools/check_rust_lib.py
+index f19f74a..705dc1d 100644
+--- a/port/tools/check_rust_lib.py
++++ b/port/tools/check_rust_lib.py
+@@ -36,7 +36,8 @@ ROOT = TOOLS.parents[1]
+ ALLOWED_LIBS_FILE = ROOT / 'port' / 'render' / 'native-static-libs-x86_64.txt'
+ ALLOWED_LIBS_FILES = {'aarch64-linux-android': ROOT / 'port' / 'render' / 'native-static-libs-aarch64-linux-android.txt',
+                       'x86_64-unknown-linux-gnu': ROOT / 'port' / 'render' / 'native-static-libs-x86_64-unknown-linux-gnu.txt',
+-                      'aarch64-apple-darwin': ROOT / 'port' / 'render' / 'native-static-libs-aarch64-apple-darwin.txt'}
++                      'aarch64-apple-darwin': ROOT / 'port' / 'render' / 'native-static-libs-aarch64-apple-darwin.txt',
++                      'aarch64-apple-ios': ROOT / 'port' / 'render' / 'native-static-libs-aarch64-apple-ios.txt'}
+ DYNAMIC_CRT = re.compile(rb'[/-]defaultlib:\s*"?msvcrt', re.I)
+ SCN_CODE = 0x00000020
+ SCN_EXECUTE = 0x20000000
+diff --git a/port/tools/rustgs.py b/port/tools/rustgs.py
+index 024ebcc..71bfbf6 100644
+--- a/port/tools/rustgs.py
++++ b/port/tools/rustgs.py
+@@ -133,8 +133,9 @@ WASM = 'wasm32-unknown-unknown'
+ ANDROID = 'aarch64-linux-android'  # build_host64.py --target android-arm64 (finding 091)
+ LINUX = 'x86_64-unknown-linux-gnu'  # build_host64.py --target linux-x64 (here, or cross-built for WSL)
+ MAC = 'aarch64-apple-darwin'      # build_host64.py --target macos-arm64, on a Mac
+-TARGETS = (X64, WASM, ANDROID, LINUX, MAC)   # i686 is retired
+-ARCHIVE_TARGETS = (ANDROID, LINUX, MAC)   # libdhd_render.a
++IOS = 'aarch64-apple-ios'         # iPhoneOS device build, through Xcode
++TARGETS = (X64, WASM, ANDROID, LINUX, MAC, IOS)   # i686 is retired
++ARCHIVE_TARGETS = (ANDROID, LINUX, MAC, IOS)   # libdhd_render.a
+ CHECK_TARGETS = TARGETS
+ PROFILES = ('release', 'fixloop')
+ FEATURES = ('test-hooks',)       # what a caller may add; native / web are rustgs's own
+@@ -242,6 +243,8 @@ def c_tools(triple):
+         # target dir; cc puts these flags last, so they win
+         return {'CC_' + var: str(bin_dir / 'clang.exe'), 'AR_' + var: str(bin_dir / 'llvm-ar.exe'),
+                 'CFLAGS_' + var: '-g0'}
++    if triple == IOS:
++        return {'CC_' + var: '/usr/bin/clang', 'AR_' + var: '/usr/bin/ar', 'CFLAGS_' + var: '-g0'}
+     if triple in (LINUX, MAC) and os.name != 'nt':
+         # the machine's own compiler (cc finds it; Apple's through xcrun, with the SDK ring needs),
+         # without debug info: ring asks for -g3, whose DWARF names the registry and the target dir
+@@ -700,11 +703,18 @@ def feature_args(triple, features):
+     return ['--features', ','.join(['native'] + list(features))]
+ 
+ 
+-def run_cargo(cmd, env):
++def run_cargo(cmd, env, *, live=False):
+     print('  + ' + ' '.join(cmd), flush=True)
+-    r = subprocess.run(cmd, cwd=str(RENDER), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+-                       text=True, errors='replace')
+-    return r
++    options = dict(cwd=str(RENDER), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
++                   text=True, errors='replace')
++    if not live:
++        return subprocess.run(cmd, **options)
++    with subprocess.Popen(cmd, **options) as process:
++        lines = []
++        for line in process.stdout:
++            print(line, end='', flush=True)
++            lines.append(line)
++        return subprocess.CompletedProcess(cmd, process.wait(), ''.join(lines))
+ 
+ 
+ def settings_gate(env):
+@@ -797,8 +807,8 @@ def build(triple, features=(), profile='release', no_cache=False, crate=RENDER_C
+     """Builds (or fetches) the library; returns the report dict. Raises Refused or SystemExit."""
+     features = list(parse_features(','.join(features)))
+     check_features(features)
+-    if triple == MAC and sys.platform != 'darwin':
+-        refuse('--target %s builds on a Mac (ring compiles its C against the macOS SDK); `check` runs here' % MAC)
++    if triple in (MAC, IOS) and sys.platform != 'darwin':
++        refuse('--target %s builds on a Mac with the corresponding Xcode SDK' % triple)
+     if crate not in CRATES:
+         refuse('--crate %s: one of %s' % (crate, ', '.join(CRATES)))
+     if crate == STAR_CRATE:
+@@ -841,8 +851,9 @@ def build(triple, features=(), profile='release', no_cache=False, crate=RENDER_C
+            *feature_args(triple, features)]
+     if triple != WASM:
+         cmd += ['--', '--print', 'native-static-libs']
+-    r = run_cargo(cmd, env)
+-    sys.stdout.write(r.stdout[-8000:] if r.returncode else '')
++    r = run_cargo(cmd, env, live=(triple == IOS))
++    if r.returncode and triple != IOS:
++        sys.stdout.write(r.stdout[-8000:])
+     if r.returncode:
+         raise SystemExit('rustgs: cargo failed (exit %d)' % r.returncode)
+     built_dir = tdir / triple / profile

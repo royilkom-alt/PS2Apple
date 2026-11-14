@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "downhill",
+  "title": "Downhill Domination",
+  "region": "USA",
+  "serial": "SCUS-97177",
+  "bootSHA1": "4e25a222ad8a475b5d26c2e928e90b5f2b7075eb",
+  "bundle": "DownhillRevived.app",
+  "bundleID": "net.isolution.downhillrevived",
+  "upstream": "skuza-oss/downhill-revived",
+  "version": "0.7.14",
+  "stage": "Dedicated iPhoneOS port",
+  "revision": "ac62c78def347e2911b1dad5df69cc534081a487",
+  "channel": "tested-pack",
+  "frontend": "downhill"
+}

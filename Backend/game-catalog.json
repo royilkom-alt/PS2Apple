@@ -1,0 +1,831 @@
+{
+  "schema": 1,
+  "games": [
+    {
+      "title": "Downhill Domination",
+      "series": "PlayStation 2",
+      "editions": [
+        {"serial": "SCUS-97177", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro", "references": [{"repo": "skuza-oss/downhill-revived", "detail": "Matching decompilation and native Metal renderer"}]},
+        {"serial": "SLES-52202", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Mortal Kombat: Shaolin Monks",
+      "series": "PlayStation 2",
+      "editions": [
+        {"serial": "SLUS-21087", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro", "references": [{"repo": "OGmidway/mksm-recomp", "detail": "PS2 research port"}]},
+        {"serial": "SLES-53524", "region": "PAL-M5"},
+        {"serial": "SLES-53525", "region": "PAL-G"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Hot Pursuit 2",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-20362", "region": "USA", "references": [{"repo": "TechX1320/NFSHP2-ModSuite", "detail": "PS2 data and executable research"}]},
+        {"serial": "SLES-50731", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Underground",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-20811", "region": "USA"},
+        {"serial": "SLES-51967", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Underground 2",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21065", "region": "USA"},
+        {"serial": "SLES-52725", "region": "PAL-M8"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Most Wanted",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21257", "region": "USA", "references": [{"repo": "victorgbd/NFSMW-Recompiled-Mobile", "detail": "iOS port uses Xbox 360 default.xex"}]},
+        {"serial": "SLUS-21267", "region": "USA", "reportedIssue": "Stuck at logo reported", "references": [{"repo": "victorgbd/NFSMW-Recompiled-Mobile", "detail": "iOS port uses Xbox 360 default.xex"}], "compatibilityNote": "The previous iPhone build stalled at the logo."},
+        {"serial": "SLES-53557", "region": "PAL-E"},
+        {"serial": "SLES-53558", "region": "PAL-M8"},
+        {"serial": "SLES-53559", "region": "PAL-M7"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Most Wanted (Black Edition)",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21351", "region": "USA"},
+        {"serial": "SLES-53857", "region": "PAL-M3"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Carbon",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21493", "region": "USA"},
+        {"serial": "SLES-54321", "region": "PAL-E"},
+        {"serial": "SLES-54322", "region": "PAL-M8"},
+        {"serial": "SLES-54323", "region": "PAL-I-S"},
+        {"serial": "SLES-54324", "region": "PAL-R"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Carbon (Collector’s Edition)",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21494", "region": "USA"},
+        {"serial": "SLES-54402", "region": "PAL-F"},
+        {"serial": "SLES-54492", "region": "PAL-E"},
+        {"serial": "SLES-54493", "region": "PAL-F-G"}
+      ]
+    },
+    {
+      "title": "Need for Speed: ProStreet",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21658", "region": "USA"},
+        {"serial": "SLES-55002", "region": "PAL-E"},
+        {"serial": "SLES-55003", "region": "PAL-F-G"},
+        {"serial": "SLES-55004", "region": "PAL-I-S"},
+        {"serial": "SLES-55005", "region": "PAL-M8"},
+        {"serial": "SLES-55006", "region": "PAL-R"}
+      ]
+    },
+    {
+      "title": "Need for Speed: Undercover",
+      "series": "Need for Speed",
+      "editions": [
+        {"serial": "SLUS-21801", "region": "USA"},
+        {"serial": "SLES-55349", "region": "PAL-E"},
+        {"serial": "SLES-55350", "region": "PAL-F-G"},
+        {"serial": "SLES-55351", "region": "PAL-I-S"},
+        {"serial": "SLES-55352", "region": "PAL-SC"},
+        {"serial": "SLES-55353", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Guitar Hero",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21224", "region": "USA", "references": [{"repo": "noahbaxter/GHClassic", "detail": "Optional song content for the Guitar Hero II desktop port"}]},
+        {"serial": "SLES-54093", "region": "PAL-M5"},
+        {"serial": "SLES-54132", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero II",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21447", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro", "desktopTest": "macOS, Windows and Linux release", "references": [{"repo": "noahbaxter/GHClassic", "detail": "macOS, Windows and Linux release"}]},
+        {"serial": "SLES-54442", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero Encore: Rocks the ’80s",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21586", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro", "references": [{"repo": "noahbaxter/GHClassic", "detail": "Optional song content for the Guitar Hero II desktop port"}]},
+        {"serial": "SLES-54859", "region": "PAL-E"},
+        {"serial": "SLES-54860", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Guitar Hero III: Legends of Rock",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21672", "region": "USA", "reportedIssue": "Black screen reported", "references": [{"repo": "Ketbome/gh3-decomp", "detail": "Matching decompilation that builds for PS2"}], "compatibilityNote": "The previous iPhone build showed a black screen."},
+        {"serial": "SLES-54962", "region": "PAL-E"},
+        {"serial": "SLES-54974", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Guitar Hero: Aerosmith",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21740", "region": "USA"},
+        {"serial": "SLES-55191", "region": "PAL-E"},
+        {"serial": "SLES-55200", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Guitar Hero World Tour",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21781", "region": "USA"},
+        {"serial": "SLES-55355", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero: Metallica",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21843", "region": "USA"},
+        {"serial": "SLES-55472", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero: Smash Hits",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21866", "region": "USA"},
+        {"serial": "SLES-55544", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero 5",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21865", "region": "USA"},
+        {"serial": "SLES-55533", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Guitar Hero: Van Halen",
+      "series": "Guitar Hero",
+      "editions": [
+        {"serial": "SLUS-21867", "region": "USA"},
+        {"serial": "SLUS-21924", "region": "USA"},
+        {"serial": "SLES-55518", "region": "PAL-A"}
+      ]
+    },
+    {
+      "title": "God of War",
+      "series": "God of War",
+      "editions": [
+        {"serial": "SCUS-97399", "region": "USA", "desktopTest": "Windows · Opening and first fight", "references": [{"repo": "KIexster/god-of-war-recomp", "detail": "Windows · Opening and first fight"}]},
+        {"serial": "SCES-53133", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "God of War II",
+      "series": "God of War",
+      "editions": [
+        {"serial": "SCUS-97481", "region": "USA", "desktopTest": "Desktop · Full playthrough reported", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Full playthrough reported"}], "iosPreview": true},
+        {"serial": "SCES-54206", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Harvest Moon: Save the Homeland",
+      "series": "Harvest Moon",
+      "editions": [
+        {"serial": "SLUS-20251", "region": "USA"}
+      ]
+    },
+    {
+      "title": "Harvest Moon: A Wonderful Life Special Edition",
+      "series": "Harvest Moon",
+      "editions": [
+        {"serial": "SLUS-21171", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro"},
+        {"serial": "SLES-53480", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Naruto: Ultimate Ninja",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21358", "region": "USA"},
+        {"serial": "SLES-54163", "region": "PAL-F"}
+      ]
+    },
+    {
+      "title": "Naruto: Ultimate Ninja 2",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21575", "region": "USA"},
+        {"serial": "SLES-54878", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Naruto: Ultimate Ninja 3",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21727", "region": "USA"},
+        {"serial": "SLES-55237", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Naruto Shippuden: Ultimate Ninja 4",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21862", "region": "USA", "observedGameplay": "Free Battle and early Master Mode tested on Mac · iPhone retest pending"},
+        {"serial": "SLES-55481", "region": "PAL-E-F"},
+        {"serial": "SLES-55482", "region": "PAL-G-I-S"}
+      ]
+    },
+    {
+      "title": "Naruto Shippuden: Ultimate Ninja 5",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLES-55605", "region": "PAL-M5", "testedDevice": "iPhone 17 Pro", "observedGameplay": "50 FPS in menus · Battle stops", "reportedIssue": "Battle stops in build 1608"}
+      ]
+    },
+    {
+      "title": "Naruto: Uzumaki Chronicles",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21498", "region": "USA"},
+        {"serial": "SLES-54727", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Naruto: Uzumaki Chronicles 2",
+      "series": "Naruto",
+      "editions": [
+        {"serial": "SLUS-21594", "region": "USA"},
+        {"serial": "SLES-55090", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-20591", "region": "USA"},
+        {"serial": "SLES-51233", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai 2",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-20779", "region": "USA", "desktopTest": "Windows · Playable release", "references": [{"repo": "7v0biscuit/OpenKai2", "detail": "Windows · Playable release"}]},
+        {"serial": "SLES-51839", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai 3",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-20998", "region": "USA"},
+        {"serial": "SLUS-21123", "region": "USA"},
+        {"serial": "SLES-52730", "region": "PAL-M5"},
+        {"serial": "SLES-53346", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai Tenkaichi",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-21227", "region": "USA"},
+        {"serial": "SLES-53200", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai Tenkaichi 2",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-21441", "region": "USA", "desktopTest": "Windows · Versus battles", "references": [{"repo": "oric212/BT2-Recomp", "detail": "Windows · Versus battles"}]},
+        {"serial": "SLES-54164", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Budokai Tenkaichi 3",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-21678", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro", "references": [{"repo": "z3xox/BT3-Recomp", "detail": "USA gameplay overlay and VU1 entry maps"}]},
+        {"serial": "SLES-54945", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Infinite World",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-21842", "region": "USA"},
+        {"serial": "SLES-55347", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Dragon Ball Z: Sagas",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-20874", "region": "USA"}
+      ]
+    },
+    {
+      "title": "Super Dragon Ball Z",
+      "series": "Dragon Ball",
+      "editions": [
+        {"serial": "SLUS-21442", "region": "USA"},
+        {"serial": "SLES-54161", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Gran Turismo 3: A-Spec",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SCUS-97102", "region": "USA"},
+        {"serial": "SCUS-97512", "region": "USA"},
+        {"serial": "SCES-50294", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Gran Turismo 4",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SCUS-97328", "region": "USA", "desktopTest": "Desktop · Race completed", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Race completed"}], "compatibilityNote": "The retail executable is packed inside CORE.GT4. Boot still requires a game-specific adapter."},
+        {"serial": "SCES-51719", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Burnout 3: Takedown",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SLUS-21050", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro"},
+        {"serial": "SLES-52584", "region": "PAL-M4"},
+        {"serial": "SLES-52585", "region": "PAL-F-G-I"}
+      ]
+    },
+    {
+      "title": "Burnout Revenge",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SLUS-21242", "region": "USA"},
+        {"serial": "SLES-53506", "region": "PAL-M5"},
+        {"serial": "SLES-53507", "region": "PAL-M3"}
+      ]
+    },
+    {
+      "title": "Burnout Dominator",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SLUS-21596", "region": "USA"},
+        {"serial": "SLES-54627", "region": "PAL-M5"},
+        {"serial": "SLES-54681", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Tekken 4",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-20328", "region": "USA", "desktopTest": "Windows · Story Battle tested at 60 FPS", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Windows · Story Battle tested at 60 FPS"}]},
+        {"serial": "SCES-50878", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Tekken 5",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-21059", "region": "USA", "desktopTest": "Desktop · Fights tested; bonus modes pending", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Fights tested; bonus modes pending"}]},
+        {"serial": "SCES-53202", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "SoulCalibur II",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-20643", "region": "USA"},
+        {"serial": "SLES-51799", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "SoulCalibur III",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-21216", "region": "USA"},
+        {"serial": "SCES-53312", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "WWE SmackDown! Here Comes the Pain",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-20787", "region": "USA"},
+        {"serial": "SLES-52036", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "WWE SmackDown! vs. Raw 2006",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-21286", "region": "USA"},
+        {"serial": "SLES-53676", "region": "PAL-E"},
+        {"serial": "SLES-53677", "region": "PAL-I"}
+      ]
+    },
+    {
+      "title": "God Hand",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-21503", "region": "USA", "desktopTest": "Desktop · Tested through the casino hub", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Tested through the casino hub"}]},
+        {"serial": "SLES-54490", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Ico",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SCUS-97113", "region": "USA"},
+        {"serial": "SCES-50760", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Shadow of the Colossus",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SCUS-97472", "region": "USA", "desktopTest": "Desktop · About 30 minutes tested", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · About 30 minutes tested"}]},
+        {"serial": "SCES-53326", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Devil May Cry",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20216", "region": "USA", "desktopTest": "Desktop · Reached Mission 1", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Reached Mission 1"}]},
+        {"serial": "SLES-50358", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Devil May Cry 3: Dante’s Awakening",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20964", "region": "USA"},
+        {"serial": "SLES-53038", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Devil May Cry 3: Special Edition",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-21361", "region": "USA"},
+        {"serial": "SLES-54186", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Metal Gear Solid 2: Sons of Liberty",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20144", "region": "USA"},
+        {"serial": "SLES-50383", "region": "PAL-M3"},
+        {"serial": "SLES-50384", "region": "PAL-I"},
+        {"serial": "SLES-50385", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Metal Gear Solid 3: Snake Eater",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20915", "region": "USA", "desktopTest": "Desktop · Opening tested with on-demand translation", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Opening tested with on-demand translation"}], "compatibilityNote": "The desktop port translates additional code during play. Device gameplay is unverified."},
+        {"serial": "SLES-82013", "region": "PAL-E-F"},
+        {"serial": "SLES-82024", "region": "PAL-I"},
+        {"serial": "SLES-82026", "region": "PAL-S"},
+        {"serial": "SLES-82032", "region": "PAL-G"}
+      ]
+    },
+    {
+      "title": "Prince of Persia: The Sands of Time",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20743", "region": "USA"},
+        {"serial": "SLES-51918", "region": "PAL-M5"},
+        {"serial": "SLES-51961", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Onimusha: Warlords",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20018", "region": "USA"},
+        {"serial": "SLES-50247", "region": "PAL-M3"}
+      ]
+    },
+    {
+      "title": "Ōkami",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-21115", "region": "USA"},
+        {"serial": "SLES-54439", "region": "PAL-M3"}
+      ]
+    },
+    {
+      "title": "Bully / Canis Canem Edit",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-21269", "region": "USA"},
+        {"serial": "SLES-53561", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Spider-Man 2",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-20776", "region": "USA"},
+        {"serial": "SLES-52372", "region": "PAL-M5"},
+        {"serial": "SLES-52447", "region": "PAL-I"},
+        {"serial": "SLES-52493", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Black",
+      "series": "Action & adventure",
+      "editions": [
+        {"serial": "SLUS-21376", "region": "USA", "testedFPS": 60, "testedMinFPS": 30, "testedDevice": "iPhone 17 Pro"},
+        {"serial": "SLES-53886", "region": "PAL-M5"},
+        {"serial": "SLES-54030", "region": "PAL-E"}
+      ]
+    },
+    {
+      "title": "Tomb Raider: Underworld",
+      "series": "Tomb Raider",
+      "editions": [
+        {"serial": "SLUS-21858", "region": "USA", "testedDevice": "iPhone 17 Pro", "testedUnstable": true, "observedGameplay": "Playable in some sections · Frame drops during gameplay"}
+      ]
+    },
+    {
+      "title": "Resident Evil 4",
+      "series": "Horror",
+      "editions": [
+        {"serial": "SLUS-21134", "region": "USA", "testedFPS": 60, "testedMinFPS": 30, "testedDevice": "iPhone 17 Pro", "desktopTest": "Desktop · Opening and forest gameplay", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Opening and forest gameplay"}]},
+        {"serial": "SLES-53702", "region": "PAL-M5"},
+        {"serial": "SLES-53756", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Silent Hill 2",
+      "series": "Horror",
+      "editions": [
+        {"serial": "SLUS-20228", "region": "USA", "desktopTest": "Desktop · Opening and about 20 minutes tested", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Opening and about 20 minutes tested"}]},
+        {"serial": "SLES-50382", "region": "PAL-M6"},
+        {"serial": "SLES-51156", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Silent Hill 3",
+      "series": "Horror",
+      "editions": [
+        {"serial": "SLUS-20622", "region": "USA"},
+        {"serial": "SLES-51434", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Final Fantasy X",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-20312", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro"},
+        {"serial": "SCES-50490", "region": "PAL-E"},
+        {"serial": "SCES-50491", "region": "PAL-F"},
+        {"serial": "SCES-50492", "region": "PAL-G"},
+        {"serial": "SCES-50493", "region": "PAL-I"},
+        {"serial": "SCES-50494", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Final Fantasy X-2",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-20672", "region": "USA"},
+        {"serial": "SLES-51815", "region": "PAL-E"},
+        {"serial": "SLES-51816", "region": "PAL-F"},
+        {"serial": "SLES-51817", "region": "PAL-G"},
+        {"serial": "SLES-51818", "region": "PAL-I"},
+        {"serial": "SLES-51819", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Final Fantasy XII",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-20963", "region": "USA"},
+        {"serial": "SLUS-21475", "region": "USA"},
+        {"serial": "SLES-54354", "region": "PAL-E"},
+        {"serial": "SLES-54355", "region": "PAL-F"},
+        {"serial": "SLES-54356", "region": "PAL-G"},
+        {"serial": "SLES-54357", "region": "PAL-I"},
+        {"serial": "SLES-54358", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Kingdom Hearts",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-20370", "region": "USA", "testedFPS": 60, "testedDevice": "iPhone 17 Pro"},
+        {"serial": "SCES-50967", "region": "PAL-E"},
+        {"serial": "SCES-50968", "region": "PAL-F"},
+        {"serial": "SCES-50969", "region": "PAL-G"},
+        {"serial": "SCES-50970", "region": "PAL-I"},
+        {"serial": "SCES-50971", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Kingdom Hearts II",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-21005", "region": "USA"},
+        {"serial": "SLES-54114", "region": "PAL-E"},
+        {"serial": "SLES-54232", "region": "PAL-F"},
+        {"serial": "SLES-54233", "region": "PAL-G"},
+        {"serial": "SLES-54234", "region": "PAL-I"},
+        {"serial": "SLES-54235", "region": "PAL-S"}
+      ]
+    },
+    {
+      "title": "Tales of the Abyss",
+      "series": "Role-playing",
+      "editions": [
+        {"serial": "SLUS-21386", "region": "USA", "desktopTest": "SteamOS · Opening and exploration tested", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "SteamOS · Opening and exploration tested"}]}
+      ]
+    },
+    {
+      "title": "Ratchet & Clank",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97199", "region": "USA"},
+        {"serial": "SCES-50916", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Ratchet & Clank: Going Commando",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97268", "region": "USA"},
+        {"serial": "SCUS-97513", "region": "USA"},
+        {"serial": "SCES-51607", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Ratchet & Clank: Up Your Arsenal",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97353", "region": "USA"},
+        {"serial": "SCUS-97518", "region": "USA"},
+        {"serial": "SCES-52456", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Jak and Daxter: The Precursor Legacy",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97124", "region": "USA"},
+        {"serial": "SCES-50361", "region": "PAL-M6"}
+      ]
+    },
+    {
+      "title": "Jak II",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97265", "region": "USA"},
+        {"serial": "SCUS-97509", "region": "USA"},
+        {"serial": "SCES-51608", "region": "PAL-M7"}
+      ]
+    },
+    {
+      "title": "Jak 3",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97330", "region": "USA"},
+        {"serial": "SCUS-97516", "region": "USA"},
+        {"serial": "SCES-52460", "region": "PAL-M7"}
+      ]
+    },
+    {
+      "title": "Sly Cooper and the Thievius Raccoonus",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97198", "region": "USA"},
+        {"serial": "SCES-50917", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Sly 2: Band of Thieves",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97316", "region": "USA"},
+        {"serial": "SCUS-97519", "region": "USA"},
+        {"serial": "SCES-52529", "region": "PAL-M11"}
+      ]
+    },
+    {
+      "title": "Sly 3: Honor Among Thieves",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SCUS-97464", "region": "USA"},
+        {"serial": "SCES-53409", "region": "PAL-M11"}
+      ]
+    },
+    {
+      "title": "The Simpsons: Hit & Run",
+      "series": "Platformers",
+      "editions": [
+        {"serial": "SLUS-20624", "region": "USA"},
+        {"serial": "SLES-51897", "region": "PAL-M4"}
+      ]
+    },
+    {
+      "title": "Tony Hawk’s Pro Skater 3",
+      "series": "Sports & flight",
+      "editions": [
+        {"serial": "SLUS-20013", "region": "USA", "desktopTest": "Desktop · All levels reported at 60 FPS", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · All levels reported at 60 FPS"}]},
+        {"serial": "SLES-50435", "region": "PAL-E"},
+        {"serial": "SLES-50436", "region": "PAL-F"},
+        {"serial": "SLES-50437", "region": "PAL-G"}
+      ]
+    },
+    {
+      "title": "Ace Combat 04: Shattered Skies",
+      "series": "Sports & flight",
+      "editions": [
+        {"serial": "SLUS-20152", "region": "USA"},
+        {"serial": "SCES-50410", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Ace Combat 5: The Unsung War",
+      "series": "Sports & flight",
+      "editions": [
+        {"serial": "SLUS-20851", "region": "USA"},
+        {"serial": "SCES-52424", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Ace Combat Zero: The Belkan War",
+      "series": "Sports & flight",
+      "editions": [
+        {"serial": "SLUS-21346", "region": "USA"},
+        {"serial": "SCES-54041", "region": "PAL-M5"}
+      ]
+    },
+    {
+      "title": "Persona 4",
+      "series": "Persona",
+      "editions": [
+        {"serial": "SLUS-21782", "region": "USA", "desktopTest": "Windows · Gameplay after opening tested", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Windows · Gameplay after opening tested"}]}
+      ]
+    },
+    {
+      "title": "The King of Fighters XI",
+      "series": "Fighting",
+      "editions": [
+        {"serial": "SLUS-21687", "region": "USA", "desktopTest": "Desktop · Gameplay reported", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Gameplay reported"}]}
+      ]
+    },
+    {
+      "title": "Auto Modellista",
+      "series": "Racing",
+      "editions": [
+        {"serial": "SLUS-20642", "region": "USA", "desktopTest": "Desktop · Arcade race tested", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Arcade race tested"}]}
+      ]
+    },
+    {
+      "title": "Resident Evil Outbreak",
+      "series": "Resident Evil",
+      "editions": [
+        {"serial": "SLUS-20765", "region": "USA", "desktopTest": "Windows · File #1 v2.00 playthrough", "references": [{"repo": "Ninjacornix/reo", "detail": "Windows · File #1 v2.00 playthrough"}]}
+      ]
+    },
+    {
+      "title": "Sonic Heroes",
+      "series": "Sonic",
+      "editions": [
+        {"serial": "SLES-51950", "region": "PAL-M5", "desktopTest": "Desktop · Seaside Hill tested; stutter reported", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Seaside Hill tested; stutter reported"}]}
+      ]
+    },
+    {
+      "title": "SpongeBob SquarePants: Battle for Bikini Bottom",
+      "series": "SpongeBob",
+      "editions": [
+        {"serial": "SLUS-20680", "region": "USA", "desktopTest": "Desktop · Two hours of gameplay reported", "references": [{"repo": "exoteric33/ps2-native-recomp", "detail": "Desktop · Two hours of gameplay reported"}]}
+      ]
+    }
+  ]
+}
