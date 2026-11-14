@@ -73,12 +73,10 @@ Tests ran on an **iPhone 17 Pro**. The table shows the FPS observed during gamep
 
 ## iPhone and iPad Requirements
 
-PS2Apple launchers require **iOS 18.0 or later** or **iPadOS 18.0 or later**.
-
 | Hardware target | iPhone | iPad |
 | --- | --- | --- |
-| Suggested starting point for 30 FPS testing | iPhone 12 or 12 Pro (A14) | iPad (10th generation) or iPad Air (4th generation) |
-| Suggested for more demanding games | iPhone 15 Pro or iPhone 16 series and later | iPad Air or iPad Pro with M1 or later |
+| Suggested starting point for 30 FPS testing | iPhone 11 pro or 12 Pro (A14) | iPad (10th generation) or iPad Air (4th generation) |
+| Suggested for more demanding games | iPhone 14 Pro or iPhone 15 series and later | iPad Air or iPad Pro with M1 or later |
 
 iSolution verified gameplay on **iPhone 17 Pro**. See the [tested game list](#tested-by-isolution-playable) for per-game results. The hardware suggestions above are estimates pending gameplay tests.
 
