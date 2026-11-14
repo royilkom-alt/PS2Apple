@@ -40,7 +40,8 @@ def pinned(path: Path, expected: str) -> None:
         raise ValueError(f"{path.name} does not match the pinned release.")
 
 
-def make_reference(deps, build_dir: Path) -> Path:
+def make_reference(deps, build_dir: Path, *, translate=aot.translate, compile_ios=aot.compile_ios) -> Path:
+    build_dir.mkdir(parents=True, exist_ok=True)
     # Minimal valid MIPS program with a bounded basic block and an idle loop.
     program = (0x24080001, 0x1000FFFF, 0)
     image = bytearray(256 + len(program) * 4)
@@ -56,11 +57,11 @@ def make_reference(deps, build_dir: Path) -> Path:
     generated.mkdir()
     empty = build_dir / "empty"
     empty.mkdir()
-    aot.translate(deps, elf, generated, entries, empty, empty)
-    return aot.compile_ios(deps, generated, build_dir / "iPhoneOS", windows_kit=True)
+    translate(deps, elf, generated, entries, empty, empty)
+    return compile_ios(deps, generated, build_dir / "iPhoneOS", windows_kit=True)
 
 
-def make_imports(reference: Path, sdk: str, destination: Path) -> None:
+def make_imports(reference: Path, sdk: str, destination: Path, *, cxx: bool = True) -> None:
     directory = destination / "Imports"
     directory.mkdir()
     # dyld_info reports the actual provider and weak imports, including those
@@ -78,12 +79,16 @@ def make_imports(reference: Path, sdk: str, destination: Path) -> None:
                 symbols[match[2]].add(match[1])
             elif not match[2].startswith("<"):
                 raise ValueError(f"Unresolved import provider in the iPhoneOS runtime: {match[2]}")
-    if not {"UIKit", "Metal", "libSystem", "libobjc", "libc++"} <= symbols.keys():
+    required = {"UIKit", "Metal", "libSystem", "libobjc"}
+    if cxx:
+        required.add("libc++")
+    if not required <= symbols.keys():
         raise ValueError("The iPhoneOS runtime's system imports are incomplete.")
     # C++ operators and these RTTI records are also shown as weak coalesced
     # definitions. Include their standard provider explicitly for LLD.
-    symbols["libc++"].update({"__ZdaPv", "__ZdlPv", "__Znam", "__Znwm",
-                              "__ZTISt12length_error", "__ZTISt12out_of_range"})
+    if cxx:
+        symbols["libc++"].update({"__ZdaPv", "__ZdlPv", "__Znam", "__Znwm",
+                                  "__ZTISt12length_error", "__ZTISt12out_of_range"})
     # Clang can emit these standard calls in generated units independently of
     # which instructions are exercised by the release's synthetic program.
     symbols["libSystem"].update({"_memcpy", "_memmove", "_memset", "_bzero", "_memcmp",
@@ -103,7 +108,9 @@ def make_imports(reference: Path, sdk: str, destination: Path) -> None:
     }, indent=2) + "\n", encoding="ascii")
 
 
-def make_host(zig: Path, build_dir: Path, target: Path) -> None:
+def make_host(zig: Path, build_dir: Path, target: Path, *, source: Path = ENGINE_ROOT,
+              aot_only: bool = False) -> None:
+    build_dir.mkdir(parents=True, exist_ok=True)
     toolchain = build_dir / "zig-windows.cmake"
     toolchain.write_text(
         'set(CMAKE_SYSTEM_NAME Windows)\nset(CMAKE_SYSTEM_PROCESSOR x86_64)\n'
@@ -117,16 +124,33 @@ def make_host(zig: Path, build_dir: Path, target: Path) -> None:
     os.environ.setdefault("ZIG_GLOBAL_CACHE_DIR", str(build_dir / "zig-global"))
     os.environ.setdefault("ZIG_LOCAL_CACHE_DIR", str(build_dir / "zig-local"))
     host = build_dir / "Windows"
-    run([TOOLS["cmake"], "-S", ENGINE_ROOT, "-B", host, "-G", "Ninja",
+    run([TOOLS["cmake"], "-S", source, "-B", host, "-G", "Ninja",
          f"-DCMAKE_MAKE_PROGRAM={TOOLS['ninja']}", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
          f"-DCMAKE_AR={build_dir / 'ar'}", f"-DCMAKE_RANLIB={build_dir / 'ranlib'}",
          "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CXX_FLAGS=-Wno-error=date-time",
-         "-DCMAKE_DISABLE_FIND_PACKAGE_SDL2=ON", "-DPS2APPLE_AOT_PROBE=ON", "-DPS2APPLE_WINDOWS_KIT=ON"])
+         "-DCMAKE_DISABLE_FIND_PACKAGE_SDL2=ON", "-DPS2APPLE_WINDOWS_KIT=ON",
+         f"-DPS2_AOT_ONLY={'ON' if aot_only else 'OFF'}", f"-DPS2APPLE_AOT_PROBE={'OFF' if aot_only else 'ON'}"])
     run([TOOLS["cmake"], "--build", host, "--target", "eerecomp", "vurecomp", "ps2apple_windows_probe",
          "--parallel", str(aot.JOBS)])
     target.mkdir()
     for name in ("eerecomp.exe", "vurecomp.exe", "libps2runtime.a", "libps2apple_windows_probe.a"):
         shutil.copyfile(host / name, target / name)
+
+
+def stage_bt3(zig: Path, cache: Path, work: Path, target: Path) -> None:
+    import importlib
+    recipe = importlib.import_module("ports.budokai-tenkaichi-3.build")
+    target.mkdir()
+    deps = recipe.prepare(cache)
+    make_host(zig, work / "host", target / "Probe", source=deps.source, aot_only=True)
+    reference = make_reference(deps, work / "reference", translate=recipe.translate, compile_ios=recipe.compile_ios)
+    ios = target / "iPhoneOS"
+    ios.mkdir()
+    for path in (reference.parents[1] / "libps2runtime.a",
+                 reference.parents[1] / "ps2apple-ios/libps2apple_ios_launcher.a",
+                 deps.sdl / "lib/libSDL3.a", deps.wgpu / "lib/libwgpu_native.a"):
+        shutil.copyfile(path, ios / path.name)
+    make_imports(reference, output(["/usr/bin/xcrun", "--sdk", "iphoneos", "--show-sdk-version"]), ios)
 
 
 def main() -> None:
@@ -166,6 +190,7 @@ def main() -> None:
         shutil.copytree(ROOT / "Backend/ports/generic/ios/Licenses", resources / "Licenses")
         shutil.copyfile(ENGINE_ROOT / "LICENSE", resources / "LICENSE-ps2-native-recomp.txt")
         shutil.copyfile(ENGINE_ROOT / "runtime/src/ipu/NOTICE", resources / "Licenses/Play-MPEG.txt")
+        stage_bt3(args.zig_host.resolve(), args.cache.resolve() / "BT3", work / "BT3", destination / "BT3")
 
     llvm = destination / "LLVM"
     llvm.mkdir()

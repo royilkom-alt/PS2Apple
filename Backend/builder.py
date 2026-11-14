@@ -50,10 +50,10 @@ def progress(value: float, detail: str):
     event("progress", value=value, detail=detail)
 
 
-def run(command, *, cwd=None, env=None):
+def run(command, *, cwd=None, env=None, timeout=None):
     args = [str(x) for x in command]
     print("+ " + shlex.join(args), flush=True)
-    process = subprocess.run(args, cwd=cwd, env=env)
+    process = subprocess.run(args, cwd=cwd, env=env, timeout=timeout)
     if process.returncode:
         raise BuildError(f"{Path(args[0]).name} exited with status {process.returncode}. See the preceding log.")
 

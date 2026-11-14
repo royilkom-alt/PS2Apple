@@ -395,7 +395,8 @@ internal sealed class MainForm : Form
                 .Where(text => !string.IsNullOrWhiteSpace(text)));
             title.Visible = edition.Visible = true;
             disc.ForeColor = Mint;
-            disc.Text = "Boot ELF verified · Ready for local AOT build";
+            disc.Text = verified.Note ?? "Boot ELF verified · Ready for local AOT build";
+            build.Text = verified.Channel == "tested-pack" ? "Build Native IPA" : "Build IPA";
             status.Text = "Ready to build IPA";
         }, onFailure: () => disc.Text = "Disc verification failed. See the log.");
     }

@@ -345,6 +345,27 @@ class BackendTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(DiscError, "unmodified"):
             builder.disc_report(self.iso, builder.profile_for(self.path, "downhill"))
 
+    def test_windows_uses_the_mac_profile_only_for_its_verified_edition(self):
+        from windows_build import DISC_PROFILES, inspect
+
+        for serial, port_id in DISC_PROFILES.items():
+            with self.subTest(port=port_id):
+                file_name = serial[:4] + "_" + serial[5:8] + "." + serial[8:]
+                make_iso(self.iso, file_name.encode("ascii"))
+                self.assertNotIn("profile", inspect(self.iso))
+                port = builder.profile_for(self.path, port_id)
+                algorithm, _ = port.fingerprint
+                with ISOImage(self.iso) as image:
+                    _, entry = image.boot()
+                    digest = image.fingerprint(entry, algorithm)
+                fixture = builder.Profile(port.directory, {**port.data, f"boot{algorithm.upper()}": digest})
+                with patch("windows_build.profile_for", return_value=fixture):
+                    picked = inspect(self.iso)
+                    build = inspect(self.iso, self.path / "extracted.elf")
+                    self.assertEqual(picked, build)
+                    self.assertEqual(build["profile"], port_id)
+                    self.assertEqual(build["bundleID"], port.data["bundleID"])
+
     def test_reject_non_ps2_boot_entry(self):
         make_iso(self.iso, boot=b"BOOT")
         with ISOImage(self.iso) as image, self.assertRaisesRegex(DiscError, "BOOT2"):

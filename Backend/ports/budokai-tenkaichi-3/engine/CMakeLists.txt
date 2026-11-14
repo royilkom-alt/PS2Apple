@@ -14,6 +14,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(PS2_AOT_ONLY "Disable runtime code generation" OFF)
+option(PS2APPLE_WINDOWS_KIT "Build reusable PS2Apple Windows builder libraries" OFF)
 set(PS2_GENERATED "" CACHE PATH "Folder with the C++ generated for a game")
 set(PS2_RUNTIME_LIB "" CACHE FILEPATH "libps2runtime.a built earlier from this source tree (scripts/runtime.sh); a game links it instead of compiling the runtime again")
 
@@ -119,6 +120,11 @@ if(NOT WIN32 AND NOT EMSCRIPTEN AND NOT PS2_AOT_ONLY)
     target_link_libraries(ps2runtime ${PS2_API} ${CMAKE_DL_LIBS})  # vu_live.cpp loads libraries with dlopen
 endif()
 target_include_directories(ps2runtime ${PS2_API} "${CMAKE_CURRENT_SOURCE_DIR}/runtime/include")
+
+if(WIN32 AND PS2APPLE_WINDOWS_KIT)
+    add_library(ps2apple_windows_probe STATIC host/main.cpp)
+    target_link_libraries(ps2apple_windows_probe PRIVATE ps2runtime)
+endif()
 
 # the IOP thread manager tested through a synthetic module, no game needed: ninja ps2thbasetest
 if(NOT EMSCRIPTEN)

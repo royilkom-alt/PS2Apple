@@ -135,7 +135,7 @@ def seed_bt3_vu1(boot: bytes, recordings: Path, manifest: dict) -> int:
 def translate(deps: Dependencies, elf: Path, generated: Path, entries: Path, modules: Path, overlays: Path):
     with tempfile.TemporaryDirectory(prefix="translate-", dir=generated.parent) as temporary:
         stage = Path(temporary)
-        run([deps.host_tools / "eerecomp", elf, "--entries", entries, "--modules", modules,
+        run([deps.host_tools / ("eerecomp.exe" if os.name == "nt" else "eerecomp"), elf, "--entries", entries, "--modules", modules,
              "--overlays", overlays, "--out", stage])
         if not (stage / "table.cpp").is_file() or not any(stage.glob("unit_*.cpp")):
             raise BuildError("The static translator did not produce a boot function table.")
@@ -182,7 +182,7 @@ def probe(executable: Path, iso: Path, stage: Path, windows: bool) -> tuple[bool
     return False, reason or "The boot probe did not report a complete run."
 
 
-def prepare_game_code(deps: Dependencies, iso: Path, elf: Path, stage: Path) -> Path:
+def prepare_game_code(deps: Dependencies, iso: Path, elf: Path, stage: Path, *, make_probe=None) -> Path:
     generated, overlays, modules = (stage / name for name in ("Generated", "Overlays", "Modules"))
     for directory in (generated, overlays, modules, stage / "vu0", stage / "vu1"):
         directory.mkdir()
@@ -200,12 +200,16 @@ def prepare_game_code(deps: Dependencies, iso: Path, elf: Path, stage: Path) -> 
     for attempt in range(DISCOVERY_ROUNDS):
         progress(.37 + .05 * attempt, f"Translating and checking the game boot ({attempt + 1}/{DISCOVERY_ROUNDS})")
         translate(deps, elf, generated, entries, modules, overlays)
-        if attempt == 0:
-            run([TOOLS["cmake"], "-S", deps.source, "-B", host, *host_flags(deps.host_compiler),
-                 f"-DPS2_GENERATED={generated}"])
-        run([TOOLS["cmake"], "--build", host, "--target", "ps2run", "--parallel", str(JOBS)])
+        if make_probe:
+            executable = make_probe(host, generated, None)
+        else:
+            if attempt == 0:
+                run([TOOLS["cmake"], "-S", deps.source, "-B", host, *host_flags(deps.host_compiler),
+                     f"-DPS2_GENERATED={generated}"])
+            run([TOOLS["cmake"], "--build", host, "--target", "ps2run", "--parallel", str(JOBS)])
+            executable = host / "ps2run"
         misses.unlink(missing_ok=True)
-        success, reason = probe(host / "ps2run", iso, stage, has_windows)
+        success, reason = probe(executable, iso, stage, has_windows)
         if success:
             break
         if ": missing code at " not in reason or not misses.is_file():
@@ -221,11 +225,12 @@ def prepare_game_code(deps: Dependencies, iso: Path, elf: Path, stage: Path) -> 
         print(f"Discovered {len(new)} guest entry points. Compiling them ahead of time.", flush=True)
     if any((stage / "vu1").glob("*.bin")) or any((stage / "vu0").glob("*.bin")):
         progress(.65, "Compiling VU programs from the disc and boot probe")
-        run([deps.host_tools / "vurecomp", stage / "vu1", generated, "--vu0-dir", stage / "vu0"])
+        run([deps.host_tools / ("vurecomp.exe" if os.name == "nt" else "vurecomp"), stage / "vu1",
+             generated, "--vu0-dir", stage / "vu0"])
     return generated
 
 
-def compile_ios(deps: Dependencies, generated: Path, build: Path) -> Path:
+def compile_ios(deps: Dependencies, generated: Path, build: Path, *, windows_kit: bool = False) -> Path:
     flags = sdl_link_flags(deps.sdl / "lib/pkgconfig/sdl3.pc")
     if not flags:
         raise BuildError("SDL3 is missing the iPhoneOS framework link flags.")
@@ -233,9 +238,11 @@ def compile_ios(deps: Dependencies, generated: Path, build: Path) -> Path:
               "SDL_INCLUDE": deps.sdl / "include", "SDL_FLAGS": ";".join(flags)}
     run([TOOLS["cmake"], "-S", deps.source, "-B", build, *xcode_cmake(deps.sdk),
          "-DPS2_AOT_ONLY=ON", "-DCMAKE_DISABLE_FIND_PACKAGE_SDL2=ON",
+         f"-DPS2APPLE_WINDOWS_KIT={'ON' if windows_kit else 'OFF'}",
          f"-DPS2_GENERATED={generated}", f"-DPS2_WGPU_DIR={deps.wgpu}",
          *[f"-DPS2APPLE_{key}={value}" for key, value in config.items()]])
-    run([TOOLS["cmake"], "--build", build, "--target", "PS2Game", "--parallel", str(JOBS)])
+    targets = ["PS2Game", "ps2apple_ios_launcher"] if windows_kit else ["PS2Game"]
+    run([TOOLS["cmake"], "--build", build, "--target", *targets, "--parallel", str(JOBS)])
     executable = build / "PS2Game.app" / "PS2Game"
     with executable.open("rb") as stream:
         check_macho(stream)

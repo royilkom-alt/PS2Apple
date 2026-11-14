@@ -9,11 +9,11 @@ PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on
 
 | Platform | Release asset | Build setup |
 | --- | --- | --- |
-| macOS on Apple Silicon | `PS2Apple-1.0-Mac.dmg` | Drag PS2Apple into Applications. Install and open full Xcode once, then use **Install Everything** in PS2Apple. |
-| Windows 11 x64 | `PS2Apple-1.0-Windows-x64.exe` | Run the portable EXE. The bundled compiler and linker build IPA files locally and offline. |
+| macOS on Apple Silicon | [PS2Apple 1.0 DMG](https://github.com/royilkom-alt/PS2Apple/releases/download/v1.0.0/PS2Apple-1.0-Mac.dmg) | Drag PS2Apple into Applications. Install and open full Xcode once, then use **Install Everything** in PS2Apple. |
+| Windows 11 x64 | [PS2Apple 1.0.1 EXE](https://github.com/royilkom-alt/PS2Apple/releases/download/v1.0.1/PS2Apple-1.0.1-Windows-x64.exe) | Run the portable EXE. The bundled compiler and linker build IPA files locally and offline. |
 
-1. Download your desktop app from [PS2Apple Releases](https://github.com/royilkom-alt/PS2Apple/releases/latest).
-2. Click **Choose ISO**, select your PS2 disc image and an output folder, then click **Build IPA**. On Mac, the button is **Build Native IPA** or **Build Test IPA**, depending on the disc.
+1. Download the build for your platform above. [Changelog](CHANGELOG.md)
+2. Click **Choose ISO** and select your PS2 disc image and output folder. Click the build button after disc verification. On Windows, **Build Native IPA** appears for the verified Downhill Domination and Budokai Tenkaichi 3 USA editions.
 3. Sign and install the IPA on an iPhone or iPad running iOS or iPadOS 18 or later. In the launcher, tap **Play**, then select the original ISO in **Files** on first launch. The launcher remembers the ISO and the game saves to its memory card.
 
    <!-- YouTube Full Tutorial Button -->
@@ -94,7 +94,7 @@ If your launcher offers graphics settings, start with **Metal GPU**, **Reduced Â
 
 Build the IPA from the ISO, sign and install it on an iPhone 17 Pro, then select the same ISO and play past the intro and menus. Record the FPS observed during gameplay and any frame drops, audio glitches, or crashes.
 
-Both desktop apps build for ARM64 iPhoneOS. PS2Apple uses ahead-of-time (AOT) compilation for its general build path and applies disc-specific fixes where available. On Windows, offline ISO-to-IPA generation was verified with homebrew, and Guitar Hero Encore passed a 6,900-frame desktop boot check before its IPA was packaged. Device gameplay for Windows-generated IPAs is pending.
+Both desktop apps build for ARM64 iPhoneOS. PS2Apple uses ahead-of-time (AOT) compilation for its general build path and applies disc-specific fixes where available. Windows ISO-to-IPA validation covered Downhill Domination, Budokai Tenkaichi 3, and homebrew. Guitar Hero Encore passed a 6,900-frame Windows desktop boot check before its IPA was packaged. The gameplay FPS table reflects iSolution's iPhone 17 Pro tests with Mac-generated IPAs. [Windows validation details](CHANGELOG.md)
 
 ## Credits
 
