@@ -9,12 +9,16 @@ PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on
 
 | Platform | Release asset | Build setup |
 | --- | --- | --- |
-| macOS on Apple Silicon | [PS2Apple 1.0 DMG](https://github.com/royilkom-alt/PS2Apple/releases/download/v1.0.0/PS2Apple-1.0-Mac.dmg) | Drag PS2Apple into Applications. Install and open full Xcode once, then use **Install Everything** in PS2Apple. |
+| macOS on Apple Silicon | [PS2Apple 1.0.1 DMG](https://github.com/royilkom-alt/PS2Apple/releases/download/v1.0.1/PS2Apple-1.0.1-Mac.dmg) | Drag PS2Apple into Applications. Install and open full Xcode once, then use **Install Everything** in PS2Apple. |
 | Windows 11 x64 | [PS2Apple 1.0.1 EXE](https://github.com/royilkom-alt/PS2Apple/releases/download/v1.0.1/PS2Apple-1.0.1-Windows-x64.exe) | Run the portable EXE. The bundled compiler and linker build IPA files locally and offline. |
 
 1. Download the build for your platform above. [Changelog](CHANGELOG.md)
 2. Click **Choose ISO** and select your PS2 disc image and output folder. Click the build button after disc verification.
 3. Sign and install the IPA on an iPhone or iPad running iOS or iPadOS 18 or later. In the launcher, tap **Play**, then select the original ISO in **Files** on first launch. The launcher remembers the ISO and the game saves to its memory card.
+
+### Desktop updates
+
+Install the v1.0.1 download above once to enable future updates. PS2Apple checks GitHub for a newer release for your platform and shows a notice in the app. It verifies the download and installs it when you quit from a writable folder. Use **Restart to Update** to install sooner or change the automatic setting in **Updates**. [Changelog](CHANGELOG.md)
 
    <!-- YouTube Full Tutorial Button -->
 <div align="center">

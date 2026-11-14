@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct ContentView: View {
     @ObservedObject var model: BuilderModel
+    @ObservedObject var desktopUpdates: DesktopUpdates
     @Environment(\.openURL) private var openURL
     @State private var showUpdates = false
     @State private var showCatalog = false
@@ -35,6 +36,9 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     header
+                    if desktopUpdates.available != nil || desktopUpdates.installFailed {
+                        updateNotice
+                    }
                     buildCard
                     toolchain
                     if let error = model.error {
@@ -109,7 +113,6 @@ struct ContentView: View {
                 Label("Updates", systemImage: "arrow.clockwise.circle")
             }
             .popover(isPresented: $showUpdates, arrowEdge: .bottom) { updatesPanel }
-            .disabled(model.isRunning)
         }
     }
 
@@ -365,11 +368,15 @@ struct ContentView: View {
     private var updatesPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("PS2Apple \(model.version)").font(.headline)
-            Text("Check for a newer release of PS2Apple.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            TextField("Builder release repository (OWNER/REPO)", text: $model.releaseRepository)
-                .textFieldStyle(.roundedBorder)
+            if !desktopUpdates.message.isEmpty {
+                Text(desktopUpdates.message).font(.callout).foregroundStyle(.secondary)
+            }
+            Toggle("Install updates when I quit", isOn: $desktopUpdates.automatic)
+            HStack {
+                Button("Check Now") { desktopUpdates.check(manual: true) }
+                    .disabled(desktopUpdates.checking || desktopUpdates.downloading || desktopUpdates.prepared != nil)
+                Link("GitHub Releases", destination: ReleaseUpdate.page)
+            }
             ForEach(model.updates) { update in
                 if let url = update.url {
                     Link(update.detail, destination: url).font(.callout)
@@ -377,11 +384,32 @@ struct ContentView: View {
                     Text(update.detail).font(.callout).foregroundStyle(.orange)
                 }
             }
-            Button("Check Now", action: model.checkUpdates)
-                .disabled(model.isRunning)
+            if model.canCheckPortUpdates {
+                Button("Check Port Source", action: model.checkPortUpdates)
+            }
         }
         .padding(16)
         .frame(width: 355)
+    }
+
+    private var updateNotice: some View {
+        card {
+            HStack(spacing: 12) {
+                Label(desktopUpdates.message, systemImage: "arrow.down.circle")
+                    .font(.callout)
+                Spacer()
+                if desktopUpdates.downloading {
+                    ProgressView().controlSize(.small)
+                } else if desktopUpdates.prepared != nil {
+                    Button("Restart to Update") {
+                        if desktopUpdates.install(restart: true) { NSApplication.shared.terminate(nil) }
+                    }
+                    .disabled(model.isRunning)
+                } else if desktopUpdates.available != nil {
+                    Button("Download Update") { desktopUpdates.download() }
+                }
+            }
+        }
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {

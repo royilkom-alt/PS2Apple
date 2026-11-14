@@ -1,8 +1,14 @@
 # PS2Apple changelog
 
-## v1.0.1 · Windows
+## v1.0.1 · Mac and Windows
 
-### Fixes
+### Desktop updates
+
+- PS2Apple checks the official GitHub releases when opened and every six hours while running. Each app looks for stable releases that carry its platform's download.
+- A notice appears in the app when a newer version is available. PS2Apple verifies the downloaded file against GitHub's SHA-256 checksum and installs it when you quit. Choose **Restart to Update** once your current IPA build finishes to install immediately.
+- Turn off **Install updates when I quit** in **Updates** to choose when to download and install each update. Install this v1.0.1 build once to enable the updater for future releases.
+
+### Windows builder fixes
 
 - **Downhill Domination (USA, `SCUS-97177`)** now uses the dedicated Downhill Revived port on Windows. The generated IPA uses the same Native Metal renderer, launcher, and memory-card handling as the Mac build.
 - **Dragon Ball Z: Budokai Tenkaichi 3 (USA, `SLUS-21678`)** now uses its dedicated iPhoneOS runtime. The Windows builder compiles the gameplay overlay and VU programs from the selected disc.

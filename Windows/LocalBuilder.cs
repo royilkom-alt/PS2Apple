@@ -27,21 +27,6 @@ internal static class LocalBuilder
             ? JsonSerializer.Deserialize<BuilderEvent>(line[6..], Json)
             : null;
 
-    public static async Task<string> CheckUpdateAsync(string repo, CancellationToken token)
-    {
-        if (string.IsNullOrWhiteSpace(repo)) return $"PS2Apple {Version} installed.";
-        if (!System.Text.RegularExpressions.Regex.IsMatch(repo, @"\A[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\z"))
-            throw new IOException("Enter a GitHub release repository as OWNER/REPO.");
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd($"PS2Apple/{Version}");
-        using Stream result = await client.GetStreamAsync($"https://api.github.com/repos/{repo}/releases/latest", token);
-        using var release = await JsonDocument.ParseAsync(result, cancellationToken: token);
-        string tag = release.RootElement.GetProperty("tag_name").GetString() ?? "";
-        bool newer = System.Version.TryParse(tag.TrimStart('v'), out var version) &&
-                     version > System.Version.Parse(Version);
-        return $"PS2Apple {Version} installed · latest release {tag}" + (newer ? " · update available" : "");
-    }
-
     public static async Task<BuilderEvent> IdentifyAsync(string iso, Action<string> log, CancellationToken token)
     {
         BuilderEvent? disc = null;

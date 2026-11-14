@@ -9,6 +9,8 @@ The portable Windows x64 EXE contains .NET, Python, the PS2 EE and VU recompiler
 
 Building needs no extra installations or network connection. PS2Apple reads the ISO locally. Game Catalog records device gameplay tests. New ISOs can encounter unsupported PS2 behavior during the boot check or in gameplay.
 
+PS2Apple checks the official GitHub releases when it opens and while it runs. **Updates** shows the available version and download progress. The default setting installs the verified update when you quit. Open the portable EXE from a folder you can write to so PS2Apple can replace it in place. [GitHub Releases](https://github.com/royilkom-alt/PS2Apple/releases)
+
 Verified USA editions of **Downhill Domination** (`SCUS-97177`) and **Dragon Ball Z: Budokai Tenkaichi 3** (`SLUS-21678`) use the dedicated iPhoneOS ports from the Mac builder. PS2Apple checks both the serial and the original boot executable. Downhill uses the same Native Metal renderer and iPhone launcher. The Windows EXE compiles both games from the selected disc.
 
 ## Prepare a Windows release

@@ -97,9 +97,6 @@ final class BuilderModel: ObservableObject {
     @Published private(set) var logs: [LogLine] = []
     @Published private(set) var logFile: URL?
     @Published private(set) var updates: [UpdateResult] = []
-    @Published var releaseRepository: String {
-        didSet { defaults.set(releaseRepository, forKey: "releaseRepository") }
-    }
 
     let version: String = {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
@@ -126,10 +123,10 @@ final class BuilderModel: ObservableObject {
     var isRunning: Bool { job != nil }
     var toolCount: Int { checks.values.filter { $0.ok }.count }
     var canBuild: Bool { discVerified && iso != nil && !isRunning }
+    var canCheckPortUpdates: Bool { discVerified && discChannel != .general && selectedProfileID != nil && !isRunning }
 
     init() {
         let defaults = UserDefaults.standard
-        releaseRepository = defaults.string(forKey: "releaseRepository") ?? ""
         let documents = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents")
         output = defaults.url(forKey: "outputDirectory") ?? documents.appendingPathComponent("PS2Apple")
         loadCatalog()
@@ -221,15 +218,10 @@ final class BuilderModel: ObservableObject {
         execute(.build, ["build", "--iso", iso.path, "--output", output.path])
     }
 
-    func checkUpdates() {
-        let repo = releaseRepository.trimmingCharacters(in: .whitespacesAndNewlines)
-        var args = ["updates"]
-        if discVerified, discChannel != .general, let selectedProfileID {
-            args += ["--profile", selectedProfileID]
-        }
-        if !repo.isEmpty { args += ["--builder-repo", repo] }
+    func checkPortUpdates() {
+        guard canCheckPortUpdates, let selectedProfileID else { return }
         updates = []
-        execute(.updates, args)
+        execute(.updates, ["updates", "--profile", selectedProfileID])
     }
 
     func cancel() {

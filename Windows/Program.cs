@@ -7,6 +7,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args is ["--apply-update", var pid, var target, "restart" or "quit"] && int.TryParse(pid, out int parent))
+            return ReleaseUpdate.Apply(parent, target, restart: args[3] == "restart");
         if (args.Length > 0) return DiagnoseAsync(args).GetAwaiter().GetResult();
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm());

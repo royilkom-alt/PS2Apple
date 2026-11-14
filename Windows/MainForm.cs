@@ -4,7 +4,7 @@ using static PS2Apple.DesktopTheme;
 
 namespace PS2Apple;
 
-internal sealed record Preferences(string? Output, string? Repo);
+internal sealed record Preferences(string? Output, bool? AutomaticUpdates);
 
 internal sealed class MainForm : Form
 {
@@ -28,6 +28,12 @@ internal sealed class MainForm : Form
     private readonly Button chooseIso = Button("Choose ISO…");
     private readonly Button chooseOutput = Button("Choose Folder…");
     private readonly Button updates = Button("Updates");
+    private readonly Button checkUpdates = Button("Check Now");
+    private readonly Button installUpdate = Button("Restart to Update", true);
+    private readonly Label updateStatus = Label($"PS2Apple {LocalBuilder.Version}", 9, color: Muted);
+    private readonly TableLayoutPanel updateCard = Card();
+    private readonly CheckBox automaticUpdates = new() { Text = "Install updates when I quit", AutoSize = true, ForeColor = Muted, Checked = true };
+    private readonly CancellationTokenSource updateLifetime = new();
     private readonly Button cancel = Button("Cancel");
     private readonly Button reveal = Button("Reveal IPA");
     private readonly Button revealLog = Button("Reveal Log");
@@ -43,7 +49,11 @@ internal sealed class MainForm : Form
     private string? isoPath;
     private string outputPath = "";
     private string? resultPath;
-    private string repo = "";
+    private ReleaseUpdate? availableUpdate;
+    private string? downloadedUpdate;
+    private bool checkingUpdates;
+    private bool downloadingUpdate;
+    private bool restartForUpdate;
     private bool closing;
     private bool hasLog;
 
@@ -78,6 +88,7 @@ internal sealed class MainForm : Form
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(padding), BackColor = Canvas };
         var workspace = Stack();
         workspace.Controls.Add(Header((int)(44 * scale)));
+        workspace.Controls.Add(UpdatesCard());
         workspace.Controls.Add(BuildCard());
         workspace.Controls.Add(EnvironmentCard());
         scroll.Controls.Add(workspace);
@@ -94,7 +105,28 @@ internal sealed class MainForm : Form
             await Task.Run(() => LocalBuilder.CheckAsync(lines, token));
             status.Text = "Local compiler ready";
         });
-        updates.Click += async (_, _) => await RunUpdatesAsync();
+        updates.Click += (_, _) => updateCard.Visible = !updateCard.Visible;
+        checkUpdates.Click += async (_, _) => await CheckUpdatesAsync(manual: true);
+        installUpdate.Click += async (_, _) =>
+        {
+            await DownloadUpdateAsync();
+            if (downloadedUpdate is null || running is not null || IsDisposed) return;
+            restartForUpdate = true;
+            Close();
+        };
+        automaticUpdates.CheckedChanged += async (_, _) =>
+        {
+            SavePreferences();
+            if (automaticUpdates.Checked) await DownloadUpdateAsync();
+        };
+        var updateTimer = new System.Windows.Forms.Timer(components) { Interval = 6 * 60 * 60 * 1000 };
+        updateTimer.Tick += async (_, _) => await CheckUpdatesAsync();
+        Shown += async (_, _) =>
+        {
+            updateTimer.Start();
+            ReleaseUpdate.CleanAppliedDownloads();
+            await CheckUpdatesAsync();
+        };
         cancel.Click += (_, _) => { running?.Cancel(); cancel.Enabled = false; };
         reveal.Click += (_, _) => { if (resultPath is { } file) RevealFile(file); };
         revealLog.Click += (_, _) => ShowLog();
@@ -108,6 +140,22 @@ internal sealed class MainForm : Form
                 closing = true;
                 running.Cancel();
                 status.Text = "Cancelling…";
+                return;
+            }
+            if (downloadedUpdate is { } ready && (automaticUpdates.Checked || restartForUpdate))
+            {
+                try
+                {
+                    ReleaseUpdate.LaunchInstaller(ready, restartForUpdate);
+                    downloadedUpdate = null;
+                }
+                catch (Exception error) when (error is IOException or System.ComponentModel.Win32Exception)
+                {
+                    updateStatus.Text = error.Message;
+                    updateCard.Visible = true;
+                    e.Cancel = restartForUpdate;
+                    restartForUpdate = false;
+                }
             }
         };
         RefreshButtons();
@@ -116,7 +164,13 @@ internal sealed class MainForm : Form
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) components.Dispose();
+        if (disposing && !updateLifetime.IsCancellationRequested)
+        {
+            updateLifetime.Cancel();
+            updateLifetime.Dispose();
+            if (downloadedUpdate is { } file) ReleaseUpdate.Discard(file);
+            components.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -191,6 +245,18 @@ internal sealed class MainForm : Form
         card.Controls.Add(Divider());
         card.Controls.Add(Row(build, cancel));
         return card;
+    }
+
+    private Control UpdatesCard()
+    {
+        var releasePage = Button("GitHub Releases");
+        releasePage.Click += (_, _) => Process.Start(new ProcessStartInfo(ReleaseUpdate.Page) { UseShellExecute = true });
+        updateCard.Controls.Add(Label("Updates", 12, true));
+        updateCard.Controls.Add(updateStatus);
+        updateCard.Controls.Add(automaticUpdates);
+        updateCard.Controls.Add(Row(checkUpdates, installUpdate, releasePage));
+        updateCard.Visible = false;
+        return updateCard;
     }
 
     private static Control Divider() => new Panel
@@ -296,7 +362,7 @@ internal sealed class MainForm : Form
                 JsonSerializer.Deserialize<Preferences>(File.ReadAllText(settingsPath), LocalBuilder.Json) is { } saved)
             {
                 if (!string.IsNullOrWhiteSpace(saved.Output)) outputPath = saved.Output;
-                repo = saved.Repo ?? "";
+                automaticUpdates.Checked = saved.AutomaticUpdates ?? true;
             }
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
@@ -311,7 +377,7 @@ internal sealed class MainForm : Form
         try
         {
             Directory.CreateDirectory(LocalBuilder.DataFolder);
-            File.WriteAllText(settingsPath, JsonSerializer.Serialize(new Preferences(outputPath, repo)));
+            File.WriteAllText(settingsPath, JsonSerializer.Serialize(new Preferences(outputPath, automaticUpdates.Checked)));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -366,7 +432,11 @@ internal sealed class MainForm : Form
         bool idle = running is null;
         chooseIso.Enabled = chooseOutput.Enabled = idle;
         build.Enabled = idle && selectedFingerprint is not null;
-        updates.Enabled = checkTools.Enabled = idle;
+        checkTools.Enabled = idle;
+        checkUpdates.Enabled = !checkingUpdates && !downloadingUpdate && downloadedUpdate is null;
+        installUpdate.Enabled = idle && availableUpdate is not null && !downloadingUpdate;
+        installUpdate.Visible = availableUpdate is not null;
+        installUpdate.Text = downloadedUpdate is null ? "Download & Restart" : "Restart to Update";
         cancel.Visible = cancel.Enabled = !idle;
         reveal.Enabled = idle && resultPath is { } file && File.Exists(file);
         copyLog.Enabled = revealLog.Enabled = hasLog;
@@ -401,35 +471,70 @@ internal sealed class MainForm : Form
         }, onFailure: () => disc.Text = "Disc verification failed. See the log.");
     }
 
-    private async Task RunUpdatesAsync()
+    private async Task CheckUpdatesAsync(bool manual = false)
     {
-        using var prompt = new Form
+        if (checkingUpdates || downloadingUpdate || downloadedUpdate is not null) return;
+        checkingUpdates = true;
+        if (manual) updateStatus.Text = "Checking GitHub…";
+        RefreshButtons();
+        try
         {
-            Text = "Check for Updates", StartPosition = FormStartPosition.CenterParent,
-            FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-            ClientSize = new Size(410, 118), Font = Font, BackColor = Surface, ForeColor = Ink
-        };
-        prompt.HandleCreated += (_, _) => DarkTitleBar(prompt);
-        var name = new TextBox { Text = repo, Dock = DockStyle.Top, BackColor = Rail, ForeColor = Ink };
-        var confirm = Button("Check");
-        confirm.DialogResult = DialogResult.OK;
-        confirm.Dock = DockStyle.Bottom;
-        prompt.Controls.Add(name);
-        prompt.Controls.Add(new Label
+            var update = await ReleaseUpdate.CheckAsync(updateLifetime.Token);
+            if (IsDisposed) return;
+            bool newNotice = update is not null && update.Version != availableUpdate?.Version;
+            availableUpdate = update;
+            if (File.Exists(ReleaseUpdate.InstallLog))
+            {
+                updateStatus.Text = File.ReadAllText(ReleaseUpdate.InstallLog);
+                updateCard.Visible = true;
+                return;
+            }
+            updateStatus.Text = update is null ? $"PS2Apple {LocalBuilder.Version} is up to date." : $"PS2Apple {update.Version} is available.";
+            if (newNotice) updateCard.Visible = true;
+            if (automaticUpdates.Checked) await DownloadUpdateAsync();
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException
+                                    or UnauthorizedAccessException or KeyNotFoundException or InvalidOperationException)
         {
-            Text = "PS2Apple release repository (optional OWNER/REPO)", Dock = DockStyle.Top, Height = 28
-        });
-        prompt.Controls.Add(confirm);
-        prompt.AcceptButton = confirm;
-        if (prompt.ShowDialog(this) != DialogResult.OK) return;
-        repo = name.Text.Trim();
-        SavePreferences();
-        await RunAsync("Checking release information…", async (token, lines) =>
+            if (manual && !IsDisposed) updateStatus.Text = "Could not check GitHub for updates. Try again later.";
+        }
+        finally
         {
-            string result = await LocalBuilder.CheckUpdateAsync(repo, token);
-            lines(result);
-            status.Text = result;
-        });
+            checkingUpdates = false;
+            if (!IsDisposed) RefreshButtons();
+        }
+    }
+
+    private async Task DownloadUpdateAsync()
+    {
+        if (availableUpdate is not { } update || downloadingUpdate || downloadedUpdate is not null) return;
+        downloadingUpdate = true;
+        updateStatus.Text = $"Downloading PS2Apple {update.Version}…";
+        RefreshButtons();
+        try
+        {
+            if (File.Exists(ReleaseUpdate.InstallLog)) File.Delete(ReleaseUpdate.InstallLog);
+            var downloadProgress = new Progress<int>(value =>
+            {
+                if (downloadingUpdate && !IsDisposed) updateStatus.Text = $"Downloading PS2Apple {update.Version} · {value}%";
+            });
+            string file = await update.DownloadAsync(downloadProgress, updateLifetime.Token);
+            if (IsDisposed) ReleaseUpdate.Discard(file);
+            else
+            {
+                downloadedUpdate = file;
+                updateStatus.Text = $"PS2Apple {update.Version} is ready to install.";
+            }
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or UnauthorizedAccessException or OperationCanceledException)
+        {
+            if (!IsDisposed) updateStatus.Text = $"Could not download the update. {error.Message}";
+        }
+        finally
+        {
+            downloadingUpdate = false;
+            if (!IsDisposed) RefreshButtons();
+        }
     }
 
     private async Task BuildAsync()
