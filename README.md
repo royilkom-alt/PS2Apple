@@ -1,4 +1,4 @@
-# PS2Apple 1.0
+# PS2Apple
 
 PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on macOS or Windows and build an IPA from its code.
 
@@ -14,6 +14,26 @@ PS2Apple builds an iPhone or iPad app from a PlayStation 2 ISO. Choose a disc on
 1. Download your desktop app from [PS2Apple Releases](https://github.com/royilkom-alt/PS2Apple/releases/latest).
 2. Click **Choose ISO**, select your PS2 disc image and an output folder, then click **Build IPA**. On Mac, the button is **Build Native IPA** or **Build Test IPA**, depending on the disc.
 3. Sign and install the IPA on an iPhone or iPad running iOS or iPadOS 18 or later. In the launcher, tap **Play**, then select the original ISO in **Files** on first launch. The launcher remembers the ISO and the game saves to its memory card.
+
+   <!-- YouTube Full Tutorial Button -->
+<div align="center">
+
+  <h2>🎬 Full Installation & Setup Tutorial</h2>
+
+  <p>
+    Watch the complete step-by-step guide to port PS2 games to iOS and iPadOS using PS2Apple!
+  </p>
+
+  <a href="https://youtu.be/cWhA5msbWQg?si=NWis0_77FWibRkyh" target="_blank">
+    <img
+      src="https://img.shields.io/badge/FULL%20TUTORIAL%20YOUTUBE-WATCH%20NOW-FF0033?style=for-the-badge&logo=youtube&logoColor=white&labelColor=161B22"
+      alt="Watch Full YouTube Tutorial"
+      height="48"
+    />
+  </a>
+
+
+</div>
 
 ## Tested by iSolution (Playable)
 
