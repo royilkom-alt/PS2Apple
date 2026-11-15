@@ -153,6 +153,20 @@ struct ContentView: View {
                     .padding(9)
                     .background(mint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 }
+                if let result = model.dmg {
+                    HStack(spacing: 9) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(mint)
+                        Text(result.lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .font(.system(size: 11, design: .monospaced))
+                            .help(result.path)
+                        Spacer()
+                        Button("Reveal DMG", action: model.revealDMG)
+                    }
+                    .padding(9)
+                    .background(mint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
                 if let boot = model.bootCheck {
                     Label(boot.detail, systemImage: boot.ok ? "rectangle.on.rectangle" : "exclamationmark.triangle")
                         .font(.system(size: 11))
@@ -169,6 +183,12 @@ struct ContentView: View {
                     .tint(mint)
                     .foregroundStyle(Color.black)
                     .disabled(!model.canBuild)
+                    Button(action: model.buildMac) {
+                        Label("Build Mac App", systemImage: "laptopcomputer")
+                    }
+                    .controlSize(.large)
+                    .disabled(!model.canBuild || model.discChannel == .testedPack || model.discChannel == .dedicated)
+                    .help("Builds a playable macOS app and DMG with the general AOT engine.")
                     if model.isRunning {
                         Button("Cancel", role: .destructive, action: model.cancel)
                             .controlSize(.large)
