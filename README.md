@@ -63,8 +63,8 @@ Tests ran on an **iPhone 17 Pro**. The table shows the FPS observed during gamep
 | --- | --- | ---: |
 | Black | `SLUS-21376` | 30–60 |
 | Burnout 3: Takedown | `SLUS-21050` | 60 |
-| Downhill Domination | `SCUS-97177` | 60 |
-| Dragon Ball Z: Budokai Tenkaichi 3 | `SLUS-21678` | 60 |
+| Downhill Domination | `SCUS-97177` | 60 Tested on iPhone 14 Pro & iPhone 17 pro|
+| Dragon Ball Z: Budokai Tenkaichi 3 | `SLUS-21678` | 60 Tested on iPhone 17 Pro & 45-50 iPhone 14 pro |
 | Final Fantasy X | `SLUS-20312` | 60 |
 | Guitar Hero II | `SLUS-21447` | 60 |
 | Guitar Hero Encore: Rocks the ’80s | `SLUS-21586` | 60 |
