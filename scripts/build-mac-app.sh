@@ -39,6 +39,7 @@ done
 cp "$root"/Backend/*.sh "$root"/Backend/*.command "$root/Backend/VERSION" "$resources/Backend/"
 cp "$root/Backend/game-catalog.json" "$resources/Backend/"
 cp -R "$root/Backend/ios" "$resources/Backend/"
+cp -R "$root/Backend/mac" "$resources/Backend/"
 cp -R "$root/Backend/engine" "$resources/Backend/"
 mkdir "$resources/Backend/ports"
 for profile in "$root"/Backend/ports/*; do

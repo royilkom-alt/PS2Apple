@@ -427,6 +427,48 @@ def build(workspace: Path, profile: Profile, iso: Path, output: Path):
             progress(1, "IPA exported and verified")
 
 
+# Ports dédiés dont la recette accepte « build --platform mac ».
+MAC_DEDICATED_PORTS = frozenset({"budokai-tenkaichi-3"})
+
+
+def build_mac(workspace: Path, profile: Profile, iso: Path, output: Path):
+    """Construit une app macOS jouable et son DMG à partir du même disque (port générique ou port dédié compatible)."""
+    if not profile.generic and profile.data["id"] not in MAC_DEDICATED_PORTS:
+        raise BuildError(f"{profile.data['title']} uses a dedicated iPhoneOS port. The macOS build supports the general AOT path only.")
+    progress(.01, "Checking the ISO and output paths")
+    iso = iso.expanduser().resolve()
+    output = output.expanduser().resolve()
+    with workspace_lock(workspace):
+        jobs = workspace / "Jobs"
+        jobs.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=profile.data["id"] + "-mac-", dir=jobs) as directory:
+            stage = Path(directory)
+            elf = stage / "boot.elf"
+            manifest = stage / "profile.json"
+            manifest.write_text(json.dumps(profile.data), encoding="utf-8")
+            progress(.04, "Validating the selected PS2 disc")
+            disc_report(iso, profile, extract=elf)
+            progress(.12, "Checking and repairing the toolchain")
+            ensure_tools()
+            progress(.20, "Preparing the PS2Apple compiler")
+            run(recipe_command(profile, workspace, "prepare", manifest))
+            name = re.sub(r"[^A-Za-z0-9 ._-]+", "", profile.data["title"]).strip() or profile.data["serial"]
+            app = stage / "DMG" / f"{name}.app"
+            app.parent.mkdir()
+            progress(.33, "Building the game for macOS ARM64")
+            run(recipe_command(profile, workspace, "build", manifest) +
+                ["--iso", iso, "--elf", elf, "--app", app, "--platform", "mac"])
+            progress(.93, "Packaging the DMG")
+            (app.parent / "Applications").symlink_to("/Applications")
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            output.mkdir(parents=True, exist_ok=True)
+            target = output / f"{name}-{profile.data['serial']}-{stamp}-Mac.dmg"
+            run(["/usr/bin/hdiutil", "create", "-volname", name, "-srcfolder", app.parent,
+                 "-fs", "HFS+", "-format", "UDZO", "-ov", target])
+            event("artifact", path=str(target), detail="macOS ARM64 DMG · ad hoc signed · Gameplay unverified")
+            progress(1, "DMG exported")
+
+
 def generate_sources(workspace: Path, profile: Profile, iso: Path, output: Path):
     if profile.exports_ipa:
         raise BuildError("This profile exports a Native IPA. Use Build Native IPA.")
@@ -505,12 +547,12 @@ def parse_args():
     actions.add_parser("identify").add_argument("--iso", type=Path, required=True)
     if (BACKEND / "windows_bridge.py").is_file():
         actions.add_parser("serve-windows").add_argument("--folder", type=Path, required=True)
-    for action in ("inspect", "setup", "build", "generate", "updates"):
+    for action in ("inspect", "setup", "build", "build-mac", "generate", "updates"):
         sub = actions.add_parser(action)
-        sub.add_argument("--profile", default="auto" if action in ("build", "updates") else "downhill")
-        if action in ("inspect", "build", "generate"):
+        sub.add_argument("--profile", default="auto" if action in ("build", "build-mac", "updates") else "downhill")
+        if action in ("inspect", "build", "build-mac", "generate"):
             sub.add_argument("--iso", type=Path, required=True)
-        if action in ("build", "generate"):
+        if action in ("build", "build-mac", "generate"):
             sub.add_argument("--output", type=Path, required=True)
         if action == "updates":
             sub.add_argument("--builder-repo")
@@ -543,6 +585,9 @@ def main() -> int:
         elif args.action == "build" and args.profile == "auto":
             profile = identify_disc(args.workspace, args.iso, auto_aot=True)
             build(args.workspace, profile, args.iso, args.output)
+        elif args.action == "build-mac" and args.profile == "auto":
+            profile = identify_disc(args.workspace, args.iso, auto_aot=True)
+            build_mac(args.workspace, profile, args.iso, args.output)
         elif args.action == "updates" and args.profile == "auto":
             check_updates(None, args.builder_repo)
         else:
@@ -553,6 +598,8 @@ def main() -> int:
                 setup(args.workspace, profile)
             elif args.action == "build":
                 build(args.workspace, profile, args.iso, args.output)
+            elif args.action == "build-mac":
+                build_mac(args.workspace, profile, args.iso, args.output)
             elif args.action == "generate":
                 generate_sources(args.workspace, profile, args.iso, args.output)
             else:

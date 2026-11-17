@@ -72,6 +72,7 @@ final class BuilderModel: ObservableObject {
         case inspect = "Reading PS2 disc"
         case setup = "Installing dependencies"
         case build = "Building Native IPA"
+        case buildMac = "Building Mac app"
         case updates = "Checking for updates"
     }
 
@@ -106,6 +107,8 @@ final class BuilderModel: ObservableObject {
     private let files = FileManager.default
     private let process = BuildProcess()
     private var pendingIPA: URL?
+    private var pendingDMG: URL?
+    @Published private(set) var dmg: URL?
     private var startupISO: URL?
     private var matchingProfileID: String?
     private var selectedProfileID: String?
@@ -238,6 +241,16 @@ final class BuilderModel: ObservableObject {
         cancel()
     }
 
+    func buildMac() {
+        guard canBuild, let iso else { return }
+        dmg = nil
+        execute(.buildMac, ["build-mac", "--iso", iso.path, "--output", output.path])
+    }
+
+    func revealDMG() {
+        if let dmg { NSWorkspace.shared.activateFileViewerSelecting([dmg]) }
+    }
+
     func revealIPA() {
         if let ipa { NSWorkspace.shared.activateFileViewerSelecting([ipa]) }
     }
@@ -258,6 +271,7 @@ final class BuilderModel: ObservableObject {
         job = action
         cancelling = false
         pendingIPA = nil
+        pendingDMG = nil
         matchingProfileID = nil
         progress = nil
         bootProgress = nil
@@ -309,7 +323,7 @@ final class BuilderModel: ObservableObject {
                     status = event.detail ?? status
                 }
             case "boot-progress":
-                if job == .build, !cancelling, let current = event.current, let total = event.total,
+                if job == .build || job == .buildMac, !cancelling, let current = event.current, let total = event.total,
                    total > 0, (0...total).contains(current) {
                     let startedAt = current == 0 ? Date.now : bootProgress?.startedAt ?? .now
                     bootProgress = BootProgress(current: current, total: total, startedAt: startedAt)
@@ -342,6 +356,8 @@ final class BuilderModel: ObservableObject {
             case "artifact":
                 if let path = event.path, path.hasPrefix("/"), path.hasSuffix(".ipa") {
                     pendingIPA = URL(fileURLWithPath: path)
+                } else if let path = event.path, path.hasPrefix("/"), path.hasSuffix(".dmg") {
+                    pendingDMG = URL(fileURLWithPath: path)
                 }
             case "boot":
                 if job == .build, let ok = event.ok, let detail = event.detail {
@@ -396,12 +412,16 @@ final class BuilderModel: ObservableObject {
             defaults.set(pendingIPA, forKey: "ipa.\(id)")
             producedResult = true
         }
+        if code == 0, !wasCancelled, finished == .buildMac, let pendingDMG, files.fileExists(atPath: pendingDMG.path) {
+            dmg = pendingDMG
+            producedResult = true
+        }
         if wasCancelled {
             status = "Cancelled"
             error = nil
             progress = nil
             if finished == .inspect { discDetail = "Disc verification cancelled." }
-        } else if code != 0 || (finished == .build && !producedResult) {
+        } else if code != 0 || ((finished == .build || finished == .buildMac) && !producedResult) {
             status = "Action failed"
             error = error ?? "The job ended with status \(code). See the build log."
             if finished == .inspect { discDetail = error ?? "Disc verification failed." }
@@ -411,6 +431,7 @@ final class BuilderModel: ObservableObject {
             case .inspect: status = discVerified ? "Disc verified" : "Disc identified"
             case .setup: status = "Dependencies ready"
             case .build: status = discChannel?.isTestBuild == true ? "Test IPA exported" : "Native IPA exported"
+            case .buildMac: status = "Mac DMG exported"
             case .updates: status = "Update check complete"
             case nil: break
             }

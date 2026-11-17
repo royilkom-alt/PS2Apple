@@ -646,6 +646,99 @@ def compile_ios(deps: Dependencies, generated: Path, build: Path, *, windows_kit
     return executable
 
 
+MAC_MIN_OS = "14.0"
+MAC_LAUNCHER = ROOT.parent.parent / "mac" / "PS2MacLauncher.m"
+HOMEBREW = Path("/opt/homebrew")
+
+
+def compile_mac(deps: Dependencies, generated: Path, build: Path) -> Path:
+    """Compile le même code AOT en programme macOS ARM64 fenêtré (SDL2 + Metal)."""
+    if deps.desktop_wgpu is None:
+        raise BuildError("The macOS build needs the desktop Metal shader runtime.")
+    sdl2 = HOMEBREW / "lib/cmake/SDL2/SDL2Config.cmake"
+    if not sdl2.is_file():
+        raise BuildError("The macOS build needs SDL2. Run: brew install sdl2")
+    run([TOOLS["cmake"], "-S", deps.source, "-B", build, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={TOOLS['ninja']}",
+         "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_CXX_COMPILER={deps.host_compiler}",
+         "-DCMAKE_OSX_ARCHITECTURES=arm64", f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MAC_MIN_OS}",
+         # Contrairement à l'iPhone, macOS autorise à charger du code compilé pendant le jeu :
+         # le code que la sonde de démarrage n'a pas atteint (menus, sauvegarde…) est traduit à la volée.
+         f"-DCMAKE_PREFIX_PATH={HOMEBREW}", "-DPS2_AOT_ONLY=OFF",
+         f"-DPS2_GENERATED={generated}", f"-DPS2_WGPU_DIR={deps.desktop_wgpu}"])
+    if "PS2_WINDOW" not in (build / "build.ninja").read_text(errors="ignore"):
+        raise BuildError("CMake did not find SDL2, so ps2run would have no window.")
+    run([TOOLS["cmake"], "--build", build, "--target", "ps2run", "--parallel", str(JOBS)])
+    return build / "ps2run"
+
+
+def mac_bundle_info(profile: dict, *, general_probe: bool = False) -> dict:
+    ios = bundle_info(profile, general_probe=general_probe)
+    info = {key: value for key, value in ios.items() if key.startswith("PS2")}
+    info.update({
+        "CFBundleExecutable": "PS2AppleMac", "CFBundleIdentifier": profile["bundleID"] + ".mac",
+        "CFBundlePackageType": "APPL", "CFBundleName": profile["title"], "CFBundleDisplayName": profile["title"],
+        "CFBundleShortVersionString": RELEASE_VERSION, "CFBundleVersion": "1612",
+        "CFBundleSupportedPlatforms": ["MacOSX"], "LSMinimumSystemVersion": MAC_MIN_OS,
+        "LSApplicationCategoryType": "public.app-category.games", "NSHighResolutionCapable": True,
+        "CFBundleIconFile": "AppIcon", "GCSupportsControllerUserInteraction": True,
+    })
+    return info
+
+
+def bundle_dylibs(executable: Path, frameworks: Path) -> None:
+    """Copie les bibliothèques Homebrew dans l'app et réécrit leurs chemins (@rpath)."""
+    pending, seen = [executable], set()
+    while pending:
+        binary = pending.pop()
+        listing = output(["/usr/bin/otool", "-L", binary]).splitlines()[1:]
+        for line in listing:
+            name = line.strip().split(" (")[0]
+            if not name.startswith(str(HOMEBREW)):
+                continue
+            target = frameworks / Path(name).name
+            if name not in seen:
+                seen.add(name)
+                frameworks.mkdir(exist_ok=True)
+                shutil.copy2(Path(name).resolve(), target)
+                target.chmod(0o755)
+                run(["/usr/bin/install_name_tool", "-id", f"@rpath/{target.name}", target])
+                pending.append(target)
+            run(["/usr/bin/install_name_tool", "-change", name, f"@rpath/{target.name}", binary])
+    run(["/usr/bin/install_name_tool", "-add_rpath", "@executable_path/../Frameworks", executable])
+
+
+def mac_app_bundle(deps: Dependencies, executable: Path, app: Path, profile: dict, boot_report: str = "", *,
+                   general_probe: bool = False) -> None:
+    contents = app / "Contents"
+    macos, resources = contents / "MacOS", contents / "Resources"
+    macos.mkdir(parents=True)
+    resources.mkdir()
+    shutil.copy2(executable, macos / "ps2run")
+    bundle_dylibs(macos / "ps2run", contents / "Frameworks")
+    run(["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-O2", "-arch", "arm64",
+         f"-mmacosx-version-min={MAC_MIN_OS}", "-framework", "AppKit", "-framework", "UniformTypeIdentifiers",
+         MAC_LAUNCHER, "-o", macos / "PS2AppleMac"])
+    with (contents / "Info.plist").open("wb") as stream:
+        plistlib.dump(mac_bundle_info(profile, general_probe=general_probe), stream)
+    (contents / "PkgInfo").write_text("APPL????", encoding="ascii")
+    icon = ROOT.parent.parent / "ios" / "PS2AppleIcon.png"
+    if icon.is_file():
+        iconset = Path(tempfile.mkdtemp(prefix="icon-")) / "AppIcon.iconset"
+        iconset.mkdir()
+        for size in (16, 32, 128, 256, 512):
+            for scale in (1, 2):
+                name = f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"
+                run(["/usr/bin/sips", "-z", str(size * scale), str(size * scale), icon, "--out", iconset / name])
+        run(["/usr/bin/iconutil", "-c", "icns", iconset, "-o", resources / "AppIcon.icns"])
+        shutil.rmtree(iconset.parent, ignore_errors=True)
+    shutil.copy2(deps.source / "LICENSE", resources / "LICENSE-ps2-native-recomp.txt")
+    shutil.copytree(ROOT / "ios" / "Licenses", resources / "Licenses")
+    shutil.copy2(deps.source / "runtime/src/ipu/NOTICE", resources / "Licenses/Play-MPEG.txt")
+    (resources / "PortSource.txt").write_text(bundle_report(boot_report), encoding="utf-8")
+    # Signature ad hoc : obligatoire pour exécuter du code ARM64 sur macOS.
+    run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", app])
+
+
 def bundle_info(profile: dict, *, general_probe: bool = False) -> dict:
     landscape = ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]
     info = {
@@ -713,7 +806,9 @@ def main(*, audited_preview: bool = False, desktop_metal: bool = False) -> int:
     parser.add_argument("--cache", required=True, type=Path)
     for name in ("iso", "elf", "app"):
         parser.add_argument(f"--{name}", type=Path)
+    parser.add_argument("--platform", choices=("ios", "mac"), default="ios")
     args = parser.parse_args()
+    mac = args.platform == "mac"
     try:
         if args.action == "prepare":
             prepare(args.cache.resolve(), desktop_metal=desktop_metal)
@@ -732,7 +827,7 @@ def main(*, audited_preview: bool = False, desktop_metal: bool = False) -> int:
         gameplay = GAMEPLAY_PROBES.get(disc_id)
         general_probe = uses_general_probe(disc_id, audited_preview=audited_preview)
         cache = args.cache.resolve()
-        deps = prepare(cache, desktop_metal=bool(gameplay and gameplay.metal))
+        deps = prepare(cache, desktop_metal=mac or bool(gameplay and gameplay.metal))
         if general_probe:
             try:
                 deps = replace(deps, desktop_wgpu=prepare_wgpu(cache / "Toolchains", mac=True))
@@ -744,6 +839,12 @@ def main(*, audited_preview: bool = False, desktop_metal: bool = False) -> int:
                                                        boot_entries=boot_entries, audited_preview=audited_preview,
                                                        learn_ee=disc_id in EE_RECORDING_DISCS,
                                                        general_probe=general_probe, disc_id=disc_id)
+            if mac:
+                progress(.72, "Linking the game's AOT code with the macOS Metal runtime")
+                executable = compile_mac(deps, generated, stage / "macOS")
+                progress(.89, "Staging the macOS app and launcher")
+                mac_app_bundle(deps, executable, args.app, profile, boot_report, general_probe=general_probe)
+                return 0
             progress(.72, "Linking the game's AOT code with the iPhoneOS Metal shader runtime")
             executable = compile_ios(deps, generated, stage / "iPhoneOS")
             progress(.89, "Staging the iPhoneOS app and shared launcher")
