@@ -427,9 +427,13 @@ def build(workspace: Path, profile: Profile, iso: Path, output: Path):
             progress(1, "IPA exported and verified")
 
 
+# Ports dédiés dont la recette accepte « build --platform mac ».
+MAC_DEDICATED_PORTS = frozenset({"budokai-tenkaichi-3"})
+
+
 def build_mac(workspace: Path, profile: Profile, iso: Path, output: Path):
-    """Construit une app macOS jouable et son DMG à partir du même disque (port générique uniquement)."""
-    if not profile.generic:
+    """Construit une app macOS jouable et son DMG à partir du même disque (port générique ou port dédié compatible)."""
+    if not profile.generic and profile.data["id"] not in MAC_DEDICATED_PORTS:
         raise BuildError(f"{profile.data['title']} uses a dedicated iPhoneOS port. The macOS build supports the general AOT path only.")
     progress(.01, "Checking the ISO and output paths")
     iso = iso.expanduser().resolve()

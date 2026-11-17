@@ -26,6 +26,7 @@ from disc import DiscError, ISOImage  # noqa: E402
 from engine_source import RELEASE_VERSION  # noqa: E402
 from ios_deps import IOS_GAMEPAD_INFO, SDL_REV, prepare_sdl, sdl_link_flags, xcode_cmake  # noqa: E402
 from ipa import check_macho  # noqa: E402
+from ports.generic import build as generic  # noqa: E402  (bundle_dylibs, lanceur et constantes macOS)
 ENGINE_SOURCE = ROOT / "engine"
 ENGINE_BASE = "e9a48aae8e0537f3a91d8584b2d78c6056723435"
 BT3_REFERENCE = "https://github.com/z3xox/BT3-Recomp/tree/e22a34beb564e2d0f32bd60b02f0a95d9645ddcc"
@@ -46,6 +47,7 @@ class Dependencies:
     sdl: Path
     wgpu: Path
     host_compiler: str
+    desktop_wgpu: Path | None = None
 
 
 def digest(path: Path) -> str:
@@ -59,7 +61,7 @@ def host_flags(compiler: str) -> list[str]:
             "-DCMAKE_DISABLE_FIND_PACKAGE_SDL2=ON"]
 
 
-def prepare(cache: Path) -> Dependencies:
+def prepare(cache: Path, *, desktop_metal: bool = False) -> Dependencies:
     cache.mkdir(parents=True, exist_ok=True)
     source = ENGINE_SOURCE
     if not (source / "recomp/main.cpp").is_file():
@@ -84,7 +86,9 @@ def prepare(cache: Path) -> Dependencies:
         sdl = existing_sdl
     else:
         sdl = prepare_sdl(tools, sdk, key, JOBS)
-    return Dependencies(source, host, sdk, sdl, wgpu, compiler)
+    # Le build macOS rend le jeu avec la version desktop (Metal) de wgpu-native.
+    desktop_wgpu = prepare_wgpu(tools, mac=True) if desktop_metal else None
+    return Dependencies(source, host, sdk, sdl, wgpu, compiler, desktop_wgpu)
 
 
 def seed_bt3_overlay(iso: Path, overlays: Path, entries: Path) -> None:
@@ -249,6 +253,62 @@ def compile_ios(deps: Dependencies, generated: Path, build: Path, *, windows_kit
     return executable
 
 
+def compile_mac(deps: Dependencies, generated: Path, build: Path) -> Path:
+    """Compile le code AOT de BT3 en programme macOS ARM64 fenêtré (SDL2 + Metal), avec le moteur dédié."""
+    if deps.desktop_wgpu is None:
+        raise BuildError("The macOS build needs the desktop Metal shader runtime.")
+    if not (generic.HOMEBREW / "lib/cmake/SDL2/SDL2Config.cmake").is_file():
+        raise BuildError("The macOS build needs SDL2. Run: brew install sdl2")
+    run([TOOLS["cmake"], "-S", deps.source, "-B", build, "-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={TOOLS['ninja']}",
+         "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_CXX_COMPILER={deps.host_compiler}",
+         "-DCMAKE_OSX_ARCHITECTURES=arm64", f"-DCMAKE_OSX_DEPLOYMENT_TARGET={generic.MAC_MIN_OS}",
+         # Comme pour le port générique : le code non atteint par la sonde est traduit à la volée sur macOS.
+         f"-DCMAKE_PREFIX_PATH={generic.HOMEBREW}", "-DPS2_AOT_ONLY=OFF",
+         f"-DPS2_GENERATED={generated}", f"-DPS2_WGPU_DIR={deps.desktop_wgpu}"])
+    if "PS2_WINDOW" not in (build / "build.ninja").read_text(errors="ignore"):
+        raise BuildError("CMake did not find SDL2, so ps2run would have no window.")
+    run([TOOLS["cmake"], "--build", build, "--target", "ps2run", "--parallel", str(JOBS)])
+    return build / "ps2run"
+
+
+def mac_app_bundle(deps: Dependencies, executable: Path, app: Path, profile: dict) -> None:
+    """Assemble l'app macOS : ps2run + dylibs Homebrew + lanceur partagé, signée ad hoc."""
+    contents = app / "Contents"
+    macos, resources = contents / "MacOS", contents / "Resources"
+    macos.mkdir(parents=True)
+    resources.mkdir()
+    shutil.copy2(executable, macos / "ps2run")
+    generic.bundle_dylibs(macos / "ps2run", contents / "Frameworks")
+    run(["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-fobjc-arc", "-O2", "-arch", "arm64",
+         f"-mmacosx-version-min={generic.MAC_MIN_OS}", "-framework", "AppKit", "-framework", "UniformTypeIdentifiers",
+         generic.MAC_LAUNCHER, "-o", macos / "PS2AppleMac"])
+    info = {
+        "CFBundleExecutable": "PS2AppleMac", "CFBundleIdentifier": profile["bundleID"] + ".mac",
+        "CFBundlePackageType": "APPL", "CFBundleName": profile["title"], "CFBundleDisplayName": profile["title"],
+        "CFBundleShortVersionString": RELEASE_VERSION, "CFBundleVersion": "1612",
+        "CFBundleSupportedPlatforms": ["MacOSX"], "LSMinimumSystemVersion": generic.MAC_MIN_OS,
+        "LSApplicationCategoryType": "public.app-category.games", "NSHighResolutionCapable": True,
+        "GCSupportsControllerUserInteraction": True,
+        "PS2DiscSerial": profile["serial"], "PS2BootSHA256": profile["bootSHA256"],
+    }
+    with (contents / "Info.plist").open("wb") as stream:
+        plistlib.dump(info, stream)
+    (contents / "PkgInfo").write_text("APPL????", encoding="ascii")
+    shutil.copy2(deps.source / "LICENSE", resources / "LICENSE-ps2-native-recomp.txt")
+    shutil.copytree(ROOT / "ios" / "Licenses", resources / "Licenses")
+    notice = deps.source / "runtime/src/ipu/NOTICE"
+    if notice.is_file():
+        shutil.copy2(notice, resources / "Licenses/Play-MPEG.txt")
+    (resources / "PortSource.txt").write_text(
+        f"Pinned PS2Apple 1.4.2 runtime: https://github.com/exoteric33/ps2-native-recomp/tree/{ENGINE_BASE}\n"
+        f"https://github.com/gfx-rs/wgpu-native/releases/tag/{WGPU_VERSION}\n"
+        f"BT3 overlay and VU1 map: {BT3_REFERENCE}\n"
+        f"Desktop AOT boot probe: {BOOT_FRAMES} guest frames.\n",
+        encoding="utf-8")
+    # Signature ad hoc : obligatoire pour exécuter du code ARM64 sur macOS.
+    run(["/usr/bin/codesign", "--force", "--deep", "--sign", "-", app])
+
+
 def app_bundle(deps: Dependencies, executable: Path, app: Path, profile: dict) -> None:
     app.mkdir()
     shutil.copy2(executable, app / "PS2Game")
@@ -294,20 +354,28 @@ def main() -> int:
     parser.add_argument("--cache", required=True, type=Path)
     for name in ("iso", "elf", "app"):
         parser.add_argument(f"--{name}", type=Path)
+    parser.add_argument("--platform", choices=("ios", "mac"), default="ios")
     args = parser.parse_args()
+    mac = args.platform == "mac"
     try:
         if args.action == "prepare":
-            prepare(args.cache.resolve())
+            prepare(args.cache.resolve(), desktop_metal=mac)
             return 0
         if not all((args.profile, args.iso, args.elf, args.app)):
             parser.error("build requires --profile, --iso, --elf and --app")
         profile = json.loads(args.profile.read_text(encoding="utf-8"))
         if profile["serial"] != "SLUS-21678" or profile["bootSHA256"] != BT3_BOOT or digest(args.elf) != BT3_BOOT:
             raise BuildError("This pack requires the verified USA Budokai Tenkaichi 3 boot ELF.")
-        deps = prepare(args.cache.resolve())
+        deps = prepare(args.cache.resolve(), desktop_metal=mac)
         with tempfile.TemporaryDirectory(prefix="aot-", dir=args.app.parent) as temporary:
             stage = Path(temporary)
             generated = prepare_game_code(deps, args.iso.resolve(), args.elf.resolve(), stage)
+            if mac:
+                progress(.72, "Linking the game's AOT code with the macOS Metal runtime")
+                executable = compile_mac(deps, generated, stage / "macOS")
+                progress(.89, "Staging the macOS app and launcher")
+                mac_app_bundle(deps, executable, args.app, profile)
+                return 0
             progress(.72, "Linking the game's AOT code with the iPhoneOS Metal shader runtime")
             executable = compile_ios(deps, generated, stage / "iPhoneOS")
             progress(.89, "Staging the iPhoneOS app and shared launcher")
